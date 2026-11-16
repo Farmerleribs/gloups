@@ -310,7 +310,7 @@
       h("div", { class: "stack", vars: { "margin-top": "12vh" } },
         logo(),
         h("h1", { class: "title-xl", text: "Gloups" }),
-        h("p", { class: "muted", vars: { "font-size": "18px" }, text: "Le carnet de bébé de toute la famille." }),
+        h("p", { class: "muted", vars: { "font-size": "18px" }, text: "Le carnet de bébé pour toute la famille." }),
         invite ? h("div", { class: "card ok" }, h("b", { text: "Invitation reçue (" + invite + ")" }), h("span", { class: "small", text: "Connectez-vous pour rejoindre la famille." })) : null
       ),
       h("div", { class: "stack", vars: { "margin-top": "auto" } },
