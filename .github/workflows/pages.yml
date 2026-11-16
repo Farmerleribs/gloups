@@ -1,0 +1,57 @@
+name: Déployer Gloups sur GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Récupérer supabase-js et la police (versions figées, empreintes vérifiées)
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pkg && cd /tmp/pkg
+          npm pack @supabase/supabase-js@2.119.0 @fontsource-variable/google-sans-flex@5.3.2 >/dev/null
+          tar xzf supabase-supabase-js-2.119.0.tgz && cp package/dist/umd/supabase.js "$GITHUB_WORKSPACE/js/supabase.js" && rm -rf package
+          tar xzf fontsource-variable-google-sans-flex-5.3.2.tgz && mkdir -p "$GITHUB_WORKSPACE/fonts" && cp package/files/google-sans-flex-latin-wght-normal.woff2 "$GITHUB_WORKSPACE/fonts/google-sans-flex.woff2"
+          cd "$GITHUB_WORKSPACE"
+          echo "a867edbcfb029370aeec7223dd6180b560b621fbe3bc64c6584fb0369d1b7bce  js/supabase.js" | sha256sum -c -
+          echo "4f2ce47af77a0bb9ec3dbd2e81bab7eb97fbcfcd94e47fa63510bb4271b09113  fonts/google-sans-flex.woff2" | sha256sum -c -
+
+      - name: Générer les icônes PNG à partir du logo SVG
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq librsvg2-bin >/dev/null
+          rsvg-convert -w 180 -h 180 icons/icon.svg -o icons/apple-touch-icon.png
+          rsvg-convert -w 192 -h 192 icons/icon.svg -o icons/icon-192.png
+          rsvg-convert -w 512 -h 512 icons/icon.svg -o icons/icon-512.png
+          rsvg-convert -w 32 -h 32 icons/icon.svg -o icons/favicon-32.png
+          rsvg-convert -w 512 -h 512 icons/icon-maskable.svg -o icons/icon-maskable-512.png
+
+      - name: Préparer le site
+        run: |
+          mkdir _site
+          cp -r index.html manifest.webmanifest sw.js css js fonts icons _site/
+          touch _site/.nojekyll
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
