@@ -315,7 +315,6 @@
       ),
       h("div", { class: "stack", vars: { "margin-top": "auto" } },
         h("button", { class: "btn dark full", onclick: signIn, text: "Continuer avec Google" }),
-        emailBlock(),
         h("p", { class: "small muted", vars: { "text-align": "center" } }, "Gratuit, sans mot de passe. Données hébergées dans l'Union européenne. ",
           h("a", { href: "confidentialite.html", text: "Confidentialité" }), " · ", h("a", { href: "conditions.html", text: "Conditions" }))
       )
