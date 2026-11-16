@@ -1,6 +1,6 @@
 # Gloups
 
-Le carnet de bébé de toute la famille : repas, sommeil, couches, pleurs et santé, partagés en temps réel entre parents, grands-parents et nounou.
+Le carnet de bébé pour toute la famille : repas, sommeil, couches, pleurs et santé, partagés en temps réel entre parents, grands-parents et nounou.
 
 - App web installable (iPhone et Android), sans App Store : https://farmerleribs.github.io/gloups/
 - Données : Supabase (projet `gloups`, région UE), protégées par des règles d'accès au niveau des lignes.

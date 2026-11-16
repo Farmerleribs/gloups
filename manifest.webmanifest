@@ -1,7 +1,7 @@
 {
   "name": "Gloups",
   "short_name": "Gloups",
-  "description": "Le carnet de bébé de toute la famille",
+  "description": "Le carnet de bébé pour toute la famille",
   "lang": "fr",
   "start_url": "./",
   "scope": "./",
