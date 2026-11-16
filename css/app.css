@@ -201,3 +201,9 @@ textarea.input { padding: 12px 14px; min-height: 90px; resize: vertical; }
   .dock { border-radius: 24px; margin-bottom: 12px; border: 1px solid var(--line); }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* Pages de texte (confidentialité, conditions) */
+.doc { max-width: 680px; margin: 0 auto; line-height: 1.55; }
+.doc h2 { margin-top: 8px; }
+.doc ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.doc a.row { text-decoration: none; font-weight: 650; }
