@@ -315,9 +315,49 @@
       ),
       h("div", { class: "stack", vars: { "margin-top": "auto" } },
         h("button", { class: "btn dark full", onclick: signIn, text: "Continuer avec Google" }),
-        h("p", { class: "small muted", vars: { "text-align": "center" }, text: "Gratuit, sans mot de passe à créer. Vos données restent dans l'Union européenne." })
+        emailBlock(),
+        h("p", { class: "small muted", vars: { "text-align": "center" } }, "Gratuit, sans mot de passe. Données hébergées dans l'Union européenne. ",
+          h("a", { href: "confidentialite.html", text: "Confidentialité" }), " · ", h("a", { href: "conditions.html", text: "Conditions" }))
       )
     ));
+  }
+  function emailBlock() {
+    var box = h("div", { class: "stack" });
+    var email = h("input", { class: "input", type: "email", inputmode: "email", autocomplete: "email", placeholder: "prenom@exemple.fr", "aria-label": "Adresse e-mail" });
+    function stepEmail() {
+      var send = h("button", { class: "btn full", type: "submit", text: "Recevoir un code par e-mail" });
+      box.replaceChildren(
+        h("div", { class: "row", vars: { gap: "10px", color: "var(--muted)", "font-size": "13px" } }, h("span", { class: "grow", vars: { height: "1px", background: "var(--line)" } }), "ou", h("span", { class: "grow", vars: { height: "1px", background: "var(--line)" } })),
+        h("form", { class: "stack", onsubmit: async function (e) {
+          e.preventDefault();
+          var v = email.value.trim().toLowerCase();
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { toast("Adresse e-mail invalide.", { error: true }); return; }
+          send.disabled = true;
+          var r = await sb.auth.signInWithOtp({ email: v, options: { shouldCreateUser: true, emailRedirectTo: location.origin + location.pathname } });
+          send.disabled = false;
+          if (r.error) { toast(/rate limit/i.test(r.error.message) ? "Trop de demandes. Réessayez dans quelques minutes." : /not authorized/i.test(r.error.message) ? "L'envoi d'e-mails n'est pas encore activé sur le serveur." : errMsg(r.error), { error: true }); return; }
+          stepCode(v);
+        } }, email, send));
+    }
+    function stepCode(v) {
+      var code = h("input", { class: "input code-input", inputmode: "numeric", autocomplete: "one-time-code", maxlength: 8, placeholder: "123456", "aria-label": "Code reçu par e-mail" });
+      var ok = h("button", { class: "btn primary full", type: "submit", text: "Valider le code" });
+      box.replaceChildren(
+        h("p", { class: "small", text: "Code envoyé à " + v + ". Il est valable 1 heure. Pensez aux courriers indésirables." }),
+        h("form", { class: "stack", onsubmit: async function (e) {
+          e.preventDefault();
+          var t = code.value.replace(/\D/g, "");
+          if (t.length < 6) { toast("Le code fait 6 chiffres.", { error: true }); return; }
+          ok.disabled = true;
+          var r = await sb.auth.verifyOtp({ email: v, token: t, type: "email" });
+          ok.disabled = false;
+          if (r.error) { toast(/expired|invalid/i.test(r.error.message) ? "Code incorrect ou expiré." : errMsg(r.error), { error: true }); return; }
+        } }, code, ok),
+        h("button", { class: "btn ghost", type: "button", onclick: stepEmail, text: "Changer d'adresse ou renvoyer un code" }));
+      setTimeout(function () { code.focus(); }, 50);
+    }
+    stepEmail();
+    return box;
   }
   async function signIn() {
     var redirectTo = location.origin + location.pathname;
@@ -804,6 +844,7 @@
   function route() {
     if (S.loading) return;
     if (!S.user) { screenWelcome(); return; }
+    if (!S.profile || !S.profile.first_name) { screenName(); return; }
     var pendingInvite = lsGet("gloups.invite");
     if (pendingInvite) {
       mount(h("main", { class: "screen plain" }, logo("s"), h("h1", { class: "title-l", text: "Rejoindre une famille" }), joinForm(pendingInvite),
@@ -818,6 +859,26 @@
     else screenHome();
   }
   window.addEventListener("hashchange", function () { closeSheet(); route(); });
+
+  function screenName() {
+    var input = h("input", { class: "input", maxlength: 60, autocomplete: "given-name", placeholder: "Votre prénom" });
+    var btn = h("button", { class: "btn primary full", type: "submit", text: "Continuer" });
+    mount(h("main", { class: "screen plain" }, logo("s"),
+      h("h1", { class: "title-l", text: "Comment vous appelez-vous ?" }),
+      h("p", { class: "muted", text: "Votre prénom apparaît à côté de vos saisies pour le reste de la famille." }),
+      h("form", { class: "stack", onsubmit: async function (e) {
+        e.preventDefault();
+        var v = input.value.trim();
+        if (!v) return;
+        btn.disabled = true;
+        var r = await sb.from("profiles").update({ first_name: v }).eq("id", S.user.id).select().single();
+        btn.disabled = false;
+        if (r.error) { toast(errMsg(r.error), { error: true }); return; }
+        S.profile = r.data; route();
+      } }, h("label", { class: "field" }, h("span", { text: "Prénom" }), input), btn),
+      h("button", { class: "btn ghost", onclick: signOut, text: "Se déconnecter" })));
+    setTimeout(function () { input.focus(); }, 50);
+  }
 
   async function boot(reload) {
     S.loading = true;
