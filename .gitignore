@@ -1,0 +1,5 @@
+# Générés au déploiement (voir .github/workflows/pages.yml)
+js/supabase.js
+fonts/*.woff2
+icons/*.png
+.DS_Store
