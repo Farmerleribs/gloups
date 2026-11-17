@@ -92,6 +92,7 @@
     home: "M4 11l8-7 8 7v9H4zM10 20v-5h4v5",
     list: "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
     chart: "M5 20V11M12 20V5M19 20v-8",
+    cal: "M4 6h16v14H4zM4 10h16M8 3v4M16 3v4",
     family: "M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2 20c0-3 3-5 6-5s6 2 6 5M14 15.5c3 0 8 1 8 4.5"
   };
   function icon(name, size) {
@@ -188,7 +189,7 @@
     session: null, user: null, profile: null,
     memberships: [], family: null, role: null,
     children: [], child: null, members: [], profiles: {},
-    events: [], loading: true, channel: null, tick: null,
+    events: [], appts: [], evFrom: null, evChild: null, loading: true, channel: null, tick: null,
     deferredInstall: null
   };
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
@@ -286,11 +287,16 @@
   }
   async function loadEvents() {
     if (!S.child) { S.events = []; return; }
-    var since = new Date(startOfDay(new Date()).getTime() - 7 * 86400000).toISOString();
+    // Au moins les 7 derniers jours, ou plus si le journal a déjà remonté plus loin
+    var def = startOfDay(new Date()).getTime() - 7 * 86400000;
+    if (S.evChild !== S.child.id) S.evFrom = null;
+    var from = S.evFrom != null ? Math.min(S.evFrom, def) : def;
+    var since = new Date(from).toISOString();
     var r = await sb.from("events").select("*").eq("child_id", S.child.id).is("deleted_at", null)
-      .or("started_at.gte." + since + ",ended_at.is.null").order("started_at", { ascending: false }).limit(500);
+      .or("started_at.gte." + since + ",ended_at.is.null").order("started_at", { ascending: false }).limit(4000);
     if (r.error) throw r.error;
     S.events = r.data || [];
+    S.evFrom = from; S.evChild = S.child.id;
   }
   function subscribe() {
     if (S.channel) { sb.removeChannel(S.channel); S.channel = null; }
@@ -303,7 +309,7 @@
   function refresh() {
     clearTimeout(refreshing);
     refreshing = setTimeout(async function () {
-      try { await loadEvents(); route(); } catch (e) { /* hors ligne : on garde l'affichage */ }
+      try { await Promise.all([loadEvents(), loadAppts()]); route(); } catch (e) { /* hors ligne : on garde l'affichage */ }
     }, 250);
   }
 
@@ -542,6 +548,7 @@
           h("span", { class: "small muted", text: ageLabel(c) })),
         h("a", { href: "#/famille", class: "row", "aria-label": "Famille et réglages", vars: { "text-decoration": "none", gap: "0" } }, membersInit)),
       !sleeping ? napCard(canWrite) : null,
+      nextApptCard(),
       h("section", { class: "stack", vars: { gap: "8px" } },
         h("span", { class: "eyebrow", text: "Depuis le dernier" }),
         h("div", { class: "tiles" },
@@ -563,6 +570,15 @@
     appEl.append(dock("home", canWrite));
   }
 
+  // Prochain rendez-vous dans les 14 jours
+  function nextApptCard() {
+    var now = Date.now();
+    var a = myAppts().filter(function (x) { return apptEnd(x).getTime() > now && new Date(x.starts_at).getTime() < now + 14 * DAY_MS; })[0];
+    if (!a) return null;
+    return h("button", { class: "appt-card", onclick: function () { sheetApptDetail(a); } },
+      h("span", { class: "ic", "aria-hidden": "true" }, icon("cal", 22)),
+      h("span", { class: "grow" }, h("span", { class: "k", text: "Prochain rendez-vous" }), h("b", { text: a.title }), h("span", { class: "s", text: apptWhen(a) + (a.location ? " · " + a.location : "") })));
+  }
   function eventRow(e, canWrite) {
     var d = evDuration(e), age = freshAge(e.id);
     var item = h("div", { class: "item" + (age != null ? " fresh" : ""), vars: age != null ? { "--age": -age + "ms" } : null },
@@ -1119,37 +1135,200 @@
     appEl.append(dock("tendances", canWrite));
   }
 
-  /* ---------- Écran : journal ---------- */
-  var J = { day: null, view: lsGet("gloups.jview") || "frise", prev: null, dir: 0 };
-  function journalGo(d) {
-    var days = last7(), i = days.indexOf(d), j = days.indexOf(J.day);
-    if (i < 0 || d === J.day) return;
-    J.dir = i > j ? 1 : -1; J.day = d; screenJournal(); J.dir = 0;
+  /* ---------- Rendez-vous ---------- */
+  var KINDS = [["pediatre", "Pédiatre", "Péd."], ["sage_femme", "Sage-femme", "Sage-f."], ["vaccin", "Vaccin", "Vaccin"], ["pmi", "PMI", "PMI"], ["examen", "Examen", "Examen"], ["autre", "Autre", "Rdv"]];
+  var KIND_LBL = {}, KIND_SHORT = {};
+  KINDS.forEach(function (k) { KIND_LBL[k[0]] = k[1]; KIND_SHORT[k[0]] = k[2]; });
+  var REMINDERS = [["veille", "La veille à 18:00"], ["1h", "1 h avant"], ["15min", "15 min avant"]];
+  async function loadAppts() {
+    if (!S.family) { S.appts = []; return; }
+    var r = await health.from("appointments").select("*").eq("family_id", S.family.id).is("deleted_at", null)
+      .gte("starts_at", new Date(Date.now() - 200 * DAY_MS).toISOString()).order("starts_at").limit(500);
+    S.appts = r.error ? [] : (r.data || []);
   }
-  function screenJournal() {
+  function myAppts() { return (S.appts || []).filter(function (a) { return !a.child_id || !S.child || a.child_id === S.child.id; }); }
+  function apptsIn(a0, b0) { return myAppts().filter(function (a) { var t = new Date(a.starts_at).getTime(); return t >= a0 && t < b0; }); }
+  function apptEnd(a) { return a.ends_at ? new Date(a.ends_at) : new Date(new Date(a.starts_at).getTime() + 30 * 60000); }
+  function childOf(a) { var c = S.children.find(function (x) { return x.id === a.child_id; }); return c ? c.first_name : ""; }
+  function fmtDayLong(d) { return new Date(d).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" }); }
+  function isoDate(d) { d = new Date(d); return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+  function atLocal(dateStr, timeStr) { var p = dateStr.split("-"), q = timeStr.split(":"); return new Date(+p[0], +p[1] - 1, +p[2], +q[0], +q[1], 0, 0); }
+  function apptWhen(a) {
+    var s = new Date(a.starts_at), t = startOfDay(s).getTime(), today = startOfDay(new Date()).getTime();
+    var day = t === today ? "Aujourd'hui" : t === today + DAY_MS ? "Demain" : DAYS[s.getDay()] + " " + s.getDate() + " " + MONTHS[s.getMonth()];
+    return day + " · " + hhmm(s) + (a.ends_at ? " à " + hhmm(a.ends_at) : "");
+  }
+  // Lien Google Agenda prérempli (aucune autorisation demandée)
+  function gcalLink(a) {
+    var f = function (d) { return new Date(d).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, ""); };
+    var who = childOf(a);
+    var p = new URLSearchParams({ action: "TEMPLATE", text: a.title + (who ? " · " + who : ""), dates: f(a.starts_at) + "/" + f(apptEnd(a)) });
+    if (a.location) p.set("location", a.location);
+    p.set("details", (a.notes ? a.notes + "\n\n" : "") + "Ajouté depuis Gloups");
+    return "https://calendar.google.com/calendar/render?" + p.toString();
+  }
+  function switchBtn(on, label, sub, onchange) {
+    var b = h("button", { type: "button", class: "switch-row", role: "switch", "aria-checked": on ? "true" : "false" },
+      h("span", { class: "grow" }, h("b", { text: label }), sub ? h("span", { class: "small muted", text: sub }) : null), h("span", { class: "switch", "aria-hidden": "true" }));
+    b.addEventListener("click", function () { on = !on; b.setAttribute("aria-checked", on ? "true" : "false"); onchange(on); });
+    return b;
+  }
+  function sheetAppt(a, preset) {
+    var edit = !!(a && a.id);
+    var kind = edit ? a.kind : "pediatre", touched = edit;
+    var base = preset && preset.date != null ? new Date(preset.date) : new Date();
+    var start = edit ? new Date(a.starts_at) : (function () {
+      var d = new Date(base), now = new Date();
+      if (startOfDay(d).getTime() === startOfDay(now).getTime()) { d = new Date(now.getTime() + 3600000); d.setMinutes(d.getMinutes() < 30 ? 30 : 60, 0, 0); }
+      else d.setHours(10, 0, 0, 0);
+      return d;
+    })();
+    var end = edit ? apptEnd(a) : new Date(start.getTime() + 30 * 60000);
+    var reminders = edit ? (a.reminders || []).slice() : ["veille", "1h"];
+    var gcal = lsGet("gloups.gcal") === "1";
+    var title = h("input", { class: "input", maxlength: 120, value: edit ? a.title : KIND_LBL[kind] });
+    title.addEventListener("input", function () { touched = true; });
+    var kinds = h("div", { class: "chips" });
+    function drawKinds() {
+      kinds.replaceChildren.apply(kinds, KINDS.map(function (k) {
+        return h("button", { type: "button", class: "chip kind", "aria-pressed": kind === k[0] ? "true" : "false", onclick: function () { kind = k[0]; if (!touched) title.value = k[0] === "autre" ? "Rendez-vous" : k[1]; drawKinds(); }, text: k[1] });
+      }));
+    }
+    drawKinds();
+    var date = h("input", { class: "input", type: "date", value: isoDate(start) });
+    var t1 = h("input", { class: "input", type: "time", value: hhmm(start) });
+    var t2 = h("input", { class: "input", type: "time", value: hhmm(end) });
+    var span = end - start;
+    t1.addEventListener("change", function () { if (!t1.value) return; var s2 = atLocal(date.value || isoDate(start), t1.value); t2.value = hhmm(new Date(s2.getTime() + Math.max(15 * 60000, span))); });
+    t2.addEventListener("change", function () { if (t1.value && t2.value) span = atLocal("2000-01-01", t2.value) - atLocal("2000-01-01", t1.value); });
+    var loc = h("input", { class: "input", maxlength: 200, placeholder: "Cabinet, PMI, maternité...", value: edit && a.location ? a.location : "" });
+    var notes = h("textarea", { class: "input", maxlength: 1000, placeholder: "Questions à poser, documents à apporter..." });
+    if (edit && a.notes) notes.value = a.notes;
+    var rem = h("div", { class: "chips" });
+    function drawRem() {
+      rem.replaceChildren.apply(rem, REMINDERS.map(function (r) {
+        var on = reminders.indexOf(r[0]) >= 0;
+        return h("button", { type: "button", class: "chip rem", "aria-pressed": on ? "true" : "false", onclick: function () { reminders = on ? reminders.filter(function (x) { return x !== r[0]; }) : reminders.concat([r[0]]); drawRem(); }, text: (on ? "✓ " : "") + r[1] });
+      }));
+    }
+    drawRem();
+    var saveBtn = h("button", { class: "btn primary full", text: edit ? "Enregistrer les modifications" : "Enregistrer le rendez-vous" });
+    saveBtn.addEventListener("click", async function () {
+      var t = title.value.trim();
+      if (!t) { toast("Donnez un titre au rendez-vous.", { error: true }); return; }
+      if (!date.value || !t1.value) { toast("Choisissez la date et l'heure.", { error: true }); return; }
+      var s2 = atLocal(date.value, t1.value), e2 = t2.value ? atLocal(date.value, t2.value) : new Date(s2.getTime() + 30 * 60000);
+      if (e2 <= s2) e2 = new Date(e2.getTime() + DAY_MS);
+      var row = { title: t, kind: kind, starts_at: s2.toISOString(), ends_at: e2.toISOString(), location: loc.value.trim() || null, notes: notes.value.trim() || null, reminders: reminders };
+      saveBtn.disabled = true;
+      var r = edit
+        ? await health.from("appointments").update(row).eq("id", a.id).select().single()
+        : await health.from("appointments").insert(Object.assign({ family_id: S.family.id, child_id: S.child ? S.child.id : null }, row)).select().single();
+      saveBtn.disabled = false;
+      if (r.error) { toast(errMsg(r.error), { error: true }); return; }
+      S.appts = (S.appts || []).filter(function (x) { return x.id !== r.data.id; }).concat([r.data]).sort(function (x, y) { return new Date(x.starts_at) - new Date(y.starts_at); });
+      lsSet("gloups.gcal", gcal ? "1" : null);
+      closeSheet(); route();
+      toast(edit ? "Rendez-vous modifié" : "Rendez-vous enregistré · " + apptWhen(r.data));
+      if (gcal) setTimeout(function () { sheetApptDetail(r.data, { justSaved: true }); }, 280);
+    });
+    openSheet(edit ? "Modifier le rendez-vous" : "Nouveau rendez-vous", h("div", { class: "stack" },
+      h("div", { class: "field" }, h("span", { text: "Type" }), kinds),
+      h("label", { class: "field" }, h("span", { text: "Titre" }), title),
+      h("div", { class: "dt3" },
+        h("label", { class: "field" }, h("span", { text: "Date" }), date),
+        h("label", { class: "field" }, h("span", { text: "Début" }), t1),
+        h("label", { class: "field" }, h("span", { text: "Fin" }), t2)),
+      h("label", { class: "field" }, h("span", { text: "Lieu (facultatif)" }), loc),
+      h("label", { class: "field" }, h("span", { text: "Notes (facultatif)" }), notes),
+      h("div", { class: "field" }, h("span", { text: "Rappels dans l'agenda abonné" }), rem),
+      switchBtn(gcal, "Ajouter aussi à mon Google Agenda", "Propose l'ajout en un tap juste après l'enregistrement", function (v) { gcal = v; }),
+      saveBtn));
+  }
+  function sheetApptDetail(a, opts) {
+    opts = opts || {};
     var canWrite = S.role === "parent" || S.role === "proche";
-    var days = last7();
-    if (J.day == null || days.indexOf(J.day) < 0) J.day = days[6];
-    var d0 = J.day, isToday = d0 === days[6];
+    var who = childOf(a);
+    openSheet(KIND_LBL[a.kind] || "Rendez-vous", h("div", { class: "stack" },
+      h("div", { class: "appt-detail" },
+        h("span", { class: "k", text: fmtDayLong(a.starts_at) }),
+        h("b", { class: "t", text: hhmm(a.starts_at) + " à " + hhmm(apptEnd(a)) }),
+        h("span", { class: "n", text: a.title + (who ? " · " + who : "") }),
+        a.location ? h("span", { class: "small", text: a.location }) : null,
+        a.notes ? h("p", { class: "small", text: a.notes }) : null),
+      opts.justSaved ? h("p", { class: "small muted", text: "Enregistré dans Gloups. Ajoutez-le aussi à votre Google Agenda :" }) : null,
+      h("a", { class: "btn primary full", href: gcalLink(a), target: "_blank", rel: "noopener" }, "Ajouter à Google Agenda"),
+      canWrite ? h("div", { class: "big2" },
+        h("button", { class: "btn", onclick: function () { sheetAppt(a); }, text: "Modifier" }),
+        h("button", { class: "btn", vars: { color: "var(--alert)" }, onclick: function () { removeAppt(a); }, text: "Supprimer" })) : null,
+      h("p", { class: "small muted", text: "Le bouton Google Agenda crée une copie : une modification faite ensuite dans Gloups n'y sera pas reportée. Pour un suivi automatique, utilisez l'abonnement (onglet Famille)." })));
+  }
+  async function removeAppt(a) {
+    var r = await health.from("appointments").update({ deleted_at: new Date().toISOString() }).eq("id", a.id);
+    if (r.error) { toast(errMsg(r.error), { error: true }); return; }
+    S.appts = (S.appts || []).filter(function (x) { return x.id !== a.id; });
+    closeSheet(); route();
+    toast("Rendez-vous supprimé", { action: { label: "Rétablir", fn: async function () {
+      var u = await health.from("appointments").update({ deleted_at: null }).eq("id", a.id).select().single();
+      if (!u.error) { S.appts = S.appts.concat([u.data]).sort(function (x, y) { return new Date(x.starts_at) - new Date(y.starts_at); }); route(); }
+    } } });
+  }
+  function apptRow(a) {
+    return h("button", { class: "appt-row", onclick: function () { sheetApptDetail(a); } },
+      h("span", { class: "when", text: hhmm(a.starts_at) }),
+      h("span", { class: "what" }, h("b", { text: a.title }), h("span", { text: [KIND_LBL[a.kind], a.location].filter(Boolean).join(" · ") })));
+  }
+
+  /* ---------- Écran : journal (vues Jour, Semaine, Mois) ---------- */
+  var J = { day: null, view: "jour", list: false, dir: 0 };
+  (function () { var v = lsGet("gloups.jview"); if (v === "liste") J.list = true; else if (v === "semaine" || v === "mois") J.view = v; })();
+  function addDays(t, n) { var d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n).getTime(); }
+  function weekStart(t) { var d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate() - (d.getDay() + 6) % 7).getTime(); }
+  function monthStart(t) { var d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), 1).getTime(); }
+  function addMonths(t, n) { var d = new Date(t); return new Date(d.getFullYear(), d.getMonth() + n, 1).getTime(); }
+  function journalSave() { lsSet("gloups.jview", J.view === "jour" ? (J.list ? "liste" : "jour") : J.view); }
+  function journalShift(n) {
+    var d = J.day;
+    if (J.view === "jour") d = addDays(d, n);
+    else if (J.view === "semaine") d = addDays(d, 7 * n);
+    else { var m = addMonths(d, n), today = startOfDay(new Date()).getTime(); d = monthStart(today) === m ? today : m; }
+    J.dir = n; J.day = d; screenJournal(); J.dir = 0;
+  }
+  function journalGo(d, view) { if (view) { J.view = view; journalSave(); } J.dir = d > J.day ? 1 : d < J.day ? -1 : 0; J.day = d; screenJournal(); J.dir = 0; }
+  // Charge les saisies plus anciennes quand on remonte dans le temps
+  var evLoading = false;
+  async function ensureEvents(from) {
+    if (!S.child || evLoading || (S.evFrom != null && S.evFrom <= from)) return;
+    evLoading = true;
+    var to = new Date(S.evFrom != null ? S.evFrom : Date.now()).toISOString();
+    var r = await sb.from("events").select("*").eq("child_id", S.child.id).is("deleted_at", null)
+      .gte("started_at", new Date(from).toISOString()).lt("started_at", to).order("started_at", { ascending: false }).limit(4000);
+    evLoading = false;
+    if (r.error) return;
+    var ids = {}; S.events.forEach(function (e) { ids[e.id] = 1; });
+    S.events = S.events.concat((r.data || []).filter(function (e) { return !ids[e.id]; })).sort(function (a, b) { return new Date(b.started_at) - new Date(a.started_at); });
+    S.evFrom = from;
+    if (location.hash === "#/journal") screenJournal();
+  }
+  function daySummary(d) {
+    var evs = startsIn(d, function () { return true; });
+    if (!evs.length) return "Aucune saisie ce jour";
+    var feeds = evs.filter(isFeed).length, diapers = evs.filter(function (e) { return e.type === "diaper"; }).length;
+    var sleepM = inDay(d, function (e) { return e.type === "sleep"; }).reduce(function (s, x) { return s + x.min; }, 0);
+    return feeds + " repas · " + diapers + " couche" + (diapers > 1 ? "s" : "") + " · " + dur(sleepM) + " de sommeil";
+  }
+
+  function dayView(d0, isToday, canWrite) {
     var dayEvs = S.events.filter(function (e) { var t = new Date(e.started_at).getTime(); return t >= d0 && t < d0 + DAY_MS; });
-
-    var idx = days.indexOf(d0), from = J.prev != null && days.indexOf(J.prev) >= 0 ? days.indexOf(J.prev) : idx;
-    var ind = h("span", { class: "days-ind", "aria-hidden": "true", vars: { "--i": from } });
-    var picker = h("div", { class: "days" }, h("div", { class: "days-bg", "aria-hidden": "true" }, days.map(function () { return h("span"); })), ind, days.map(function (d) {
-      var x = new Date(d);
-      return h("button", { "aria-pressed": d === d0 ? "true" : "false", "aria-label": dayLabel(d), onclick: function () { journalGo(d); } },
-        h("span", { class: "w", text: DAYS_SHORT[x.getDay()] }), h("span", { class: "n", text: x.getDate() }));
+    var appts = apptsIn(d0, d0 + DAY_MS);
+    var mini = h("div", { class: "seg mini" }, [[false, "Frise"], [true, "Liste"]].map(function (o) {
+      return h("button", { "aria-pressed": J.list === o[0] ? "true" : "false", onclick: function () { J.list = o[0]; journalSave(); screenJournal(); }, text: o[1] });
     }));
-    if (from !== idx) requestAnimationFrame(function () { requestAnimationFrame(function () { ind.style.setProperty("--i", idx); }); });
-    J.prev = d0;
-    var seg = h("div", { class: "seg mini" }, [["frise", "Frise"], ["liste", "Liste"]].map(function (o) {
-      return h("button", { "aria-pressed": J.view === o[0] ? "true" : "false", onclick: function () { J.view = o[0]; lsSet("gloups.jview", o[0]); screenJournal(); }, text: o[1] });
-    }));
-
-    var body, dayDir = J.dir;
-    if (J.view === "liste") {
+    var body;
+    if (J.list) {
       var list = dayEvs.slice().sort(function (a, b) { return new Date(b.started_at) - new Date(a.started_at); });
-      body = h("section", { class: "card" }, h("b", { class: "title-m", text: dayLabel(d0) }),
+      body = h("section", { class: "card" }, h("div", { class: "row between" }, h("b", { class: "title-m", text: dayLabel(d0) }), mini),
+        appts.length ? h("div", { class: "list" }, appts.map(apptRow)) : null,
         h("div", { class: "list" }, list.length ? list.map(function (e) { return eventRow(e, canWrite); }) : h("span", { class: "empty", text: "Aucune saisie ce jour." })));
     } else {
       var PX = 28, grid = h("div", { class: "tl-body", vars: { height: (24 * PX) + "px" } });
@@ -1174,16 +1353,22 @@
         if (x.e.type === "cry" && x.e.ended_at && x.min >= 1) t += " " + Math.round(x.min) + "'";
         grid.append(block(3, x.a, x.b, x.e.type === "cry" ? "pleurs" : x.e.type === "note" ? "neutre" : "sante", t, 20));
       });
+      appts.forEach(function (ap) {
+        var a = (new Date(ap.starts_at) - d0) / 3600000, b = Math.min(24, (apptEnd(ap) - d0) / 3600000);
+        grid.append(h("button", { class: "tl-appt", vars: { top: (a * PX) + "px", height: Math.max(26, (b - a) * PX - 2) + "px" }, onclick: function () { sheetApptDetail(ap); } },
+          h("b", { text: hhmm(ap.starts_at) + " · " + ap.title }), ap.location ? h("span", { text: ap.location }) : null));
+      });
       if (isToday) {
         var ny = (Date.now() - d0) / 3600000 * PX;
         grid.append(h("div", { class: "tl-now", vars: { top: ny + "px" } }, h("span", { text: hhmm(new Date()) })));
       }
+      var empty = !grid.querySelector(".tl-ev, .tl-appt");
       body = h("section", { class: "card tl", "aria-label": "Frise de la journée" },
+        h("div", { class: "row between" }, h("b", { class: "title-m", text: dayLabel(d0) }), mini),
         h("div", { class: "tl-head" }, h("span", { class: "sommeil", text: "Sommeil" }), h("span", { class: "repas", text: "Repas" }), h("span", { class: "couche", text: "Couches" }), h("span", { class: "pleurs", text: "Autres" })),
-        grid.querySelector(".tl-ev") ? null : h("span", { class: "empty", text: isToday ? "Rien de noté aujourd'hui. Chaque saisie apparaîtra ici à son heure." : "Aucune saisie ce jour." }),
+        empty ? h("span", { class: "empty", text: isToday ? "Rien de noté aujourd'hui. Chaque saisie apparaîtra ici à son heure." : "Aucune saisie ce jour." }) : null,
         grid);
     }
-
     var feedsN = dayEvs.filter(isFeed).length;
     var breast = inDay(d0, function (e) { return e.type === "feed.breast" && e.ended_at; }).reduce(function (s2, x) { return s2 + x.min; }, 0);
     var wetN = dayEvs.filter(function (e) { return e.type === "diaper" && e.data && e.data.pee; }).length;
@@ -1192,10 +1377,108 @@
     var cries = inDay(d0, function (e) { return e.type === "cry"; });
     var cryM = cries.reduce(function (s2, x) { return s2 + x.min; }, 0);
     var sum = function (v, n) { return h("div", null, h("b", { text: v }), h("span", { text: n })); };
+    var summary = h("section", { class: "card green sum" },
+      h("span", { class: "eyebrow", text: isToday ? "Depuis minuit" : dayLabel(d0) }),
+      h("div", { class: "sum-grid" },
+        sum(feedsN + " repas", breast ? dur(breast) + " au sein" : "aucune tétée chronométrée"),
+        sum(wetN + " + " + pooN, "couches mouillées + selles"),
+        sum(dur(sleepM), "de sommeil"),
+        sum(cryM >= 1 ? dur(cryM) : "0 min", "de pleurs, " + cries.length + " épisode" + (cries.length > 1 ? "s" : ""))));
+    return { body: body, extra: summary };
+  }
 
+  function weekView(w0) {
+    var PXH = 20, days = [], today = startOfDay(new Date()).getTime();
+    for (var i = 0; i < 7; i++) days.push(addDays(w0, i));
+    var head = h("div", { class: "wk-head" }, h("span"), days.map(function (d) {
+      var x = new Date(d);
+      return h("button", { class: "wk-d" + (d === today ? " today" : ""), "aria-label": "Voir le " + fmtDayLong(d), onclick: function () { journalGo(d, "jour"); } },
+        h("span", { text: DAYS_SHORT[x.getDay()] }), h("b", { text: x.getDate() }));
+    }));
+    var grid = h("div", { class: "wk-grid", vars: { height: (24 * PXH) + "px" } });
+    for (var hh = 0; hh <= 24; hh += 3) grid.append(h("div", { class: "wk-hour", vars: { top: (hh * PXH) + "px" } }, h("span", { text: hh < 24 ? hh + NB + "h" : "" })));
+    days.forEach(function (d, i) {
+      var col = h("div", { class: "wk-col" + (d === today ? " today" : ""), vars: { left: "calc(30px + (100% - 30px) * " + i + " / 7)", width: "calc((100% - 30px) / 7)" } });
+      inDay(d, function (e) { return e.type === "sleep"; }).forEach(function (x) { col.append(h("div", { class: "wk-sleep" + (x.e.ended_at ? "" : " on"), vars: { top: (x.a * PXH) + "px", height: Math.max(2, (x.b - x.a) * PXH) + "px" } })); });
+      startsIn(d, isFeed).forEach(function (e) { col.append(h("div", { class: "wk-feed", vars: { top: ((new Date(e.started_at) - d) / 3600000 * PXH) + "px" } })); });
+      startsIn(d, function (e) { return e.type === "diaper"; }).forEach(function (e) { col.append(h("div", { class: "wk-diaper", vars: { top: ((new Date(e.started_at) - d) / 3600000 * PXH) + "px" } })); });
+      apptsIn(d, addDays(d, 1)).forEach(function (ap) {
+        var a = (new Date(ap.starts_at) - d) / 3600000, b = Math.min(24, (apptEnd(ap) - d) / 3600000);
+        col.append(h("button", { class: "wk-appt", vars: { top: (a * PXH) + "px", height: Math.max(26, (b - a) * PXH) + "px" }, "aria-label": ap.title + ", " + hhmm(ap.starts_at), onclick: function () { sheetApptDetail(ap); } },
+          h("b", { text: hhmm(ap.starts_at) }), h("span", { text: KIND_SHORT[ap.kind] || "Rdv" })));
+      });
+      if (d === today) col.append(h("div", { class: "wk-now", vars: { top: ((Date.now() - d) / 3600000 * PXH) + "px" } }));
+      grid.append(col);
+    });
+    return h("section", { class: "card wk", "aria-label": "Semaine" }, head, grid,
+      legend([["l-sleep", "Sommeil"], ["l-feed", "Repas"], ["l-diaper", "Couche"], ["l-appt", "Rendez-vous"]]));
+  }
+
+  function monthView(m0) {
+    var start = weekStart(m0), mEnd = addMonths(m0, 1), today = startOfDay(new Date()).getTime();
+    var marks = {};
+    S.events.forEach(function (e) {
+      var k = startOfDay(new Date(e.started_at)).getTime();
+      if (k < start || k >= addDays(mEnd, 7)) return;
+      var m = marks[k] || (marks[k] = {});
+      if (e.type === "sleep") m.s = 1; else if (isFeed(e)) m.f = 1; else if (e.type === "diaper") m.c = 1;
+    });
+    var cells = [];
+    for (var d = start, n = 0; d < mEnd || n % 7 !== 0; d = addDays(d, 1), n++) {
+      (function (d) {
+        var x = new Date(d), m = marks[d] || {}, ap = apptsIn(d, addDays(d, 1));
+        var dots = h("span", { class: "mo-dots" }, m.s ? h("i", { class: "s" }) : null, m.f ? h("i", { class: "f" }) : null, m.c ? h("i", { class: "c" }) : null);
+        cells.push(h("button", { class: "mo-c" + (d < m0 || d >= mEnd ? " out" : "") + (d === today ? " today" : "") + (d === J.day ? " sel" : ""), "aria-label": fmtDayLong(d) + (ap.length ? ", " + ap.length + " rendez-vous" : ""), onclick: function () { J.day = d; screenJournal(); } },
+          h("b", { text: x.getDate() }), dots,
+          ap.slice(0, 2).map(function (a) { return h("span", { class: "mo-appt", text: KIND_SHORT[a.kind] || "Rdv" }); }),
+          ap.length > 2 ? h("span", { class: "mo-more", text: "+" + (ap.length - 2) }) : null));
+      })(d);
+    }
+    var sel = J.day, selAppts = apptsIn(sel, addDays(sel, 1));
+    return {
+      body: h("section", { class: "card mo", "aria-label": "Mois" },
+        h("div", { class: "mo-head" }, ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].map(function (t) { return h("span", { text: t }); })),
+        h("div", { class: "mo-grid" }, cells)),
+      extra: h("section", { class: "card" },
+        h("div", { class: "row between" }, h("b", { class: "title-m", text: fmtDayLong(sel).replace(/^./, function (c) { return c.toUpperCase(); }) }),
+          h("button", { class: "btn ghost small", onclick: function () { journalGo(sel, "jour"); }, text: "Voir le jour" })),
+        selAppts.length ? h("div", { class: "list" }, selAppts.map(apptRow)) : null,
+        h("span", { class: "small muted", text: daySummary(sel) }))
+    };
+  }
+
+  function screenJournal() {
+    var canWrite = S.role === "parent" || S.role === "proche";
+    var today = startOfDay(new Date()).getTime();
+    if (J.day == null) J.day = today;
+    var d0 = J.day, isToday = d0 === today, dayDir = J.dir;
+    var label, rangeStart, isNow;
+    if (J.view === "semaine") {
+      var w0 = weekStart(d0), w1 = addDays(w0, 6), a0 = new Date(w0), a1 = new Date(w1);
+      label = a0.getMonth() === a1.getMonth() ? a0.getDate() + " au " + a1.getDate() + " " + a1.toLocaleDateString("fr-FR", { month: "long" }) : a0.getDate() + " " + MONTHS[a0.getMonth()] + " au " + a1.getDate() + " " + MONTHS[a1.getMonth()];
+      rangeStart = w0; isNow = today >= w0 && today <= w1;
+    } else if (J.view === "mois") {
+      var m0 = monthStart(d0);
+      label = new Date(m0).toLocaleDateString("fr-FR", { month: "long", year: "numeric" }).replace(/^./, function (c) { return c.toUpperCase(); });
+      rangeStart = weekStart(m0); isNow = monthStart(today) === m0;
+    } else {
+      label = fmtDayLong(d0); rangeStart = d0; isNow = isToday;
+    }
+    if (S.evFrom != null && rangeStart < S.evFrom && rangeStart <= today) ensureEvents(rangeStart);
+
+    var seg = h("div", { class: "seg" }, [["jour", "Jour"], ["semaine", "Semaine"], ["mois", "Mois"]].map(function (o) {
+      return h("button", { "aria-pressed": J.view === o[0] ? "true" : "false", onclick: function () { if (J.view === o[0]) return; J.view = o[0]; journalSave(); screenJournal(); }, text: o[1] });
+    }));
+    var nav = h("div", { class: "jnav" },
+      h("button", { class: "icon-btn", "aria-label": "Période précédente", onclick: function () { journalShift(-1); } }, icon("back", 20)),
+      h("div", { class: "jnav-l" }, h("b", { text: label }), !isNow ? h("button", { class: "chip", onclick: function () { journalGo(today); }, text: "Aujourd'hui" }) : null),
+      h("button", { class: "icon-btn flip", "aria-label": "Période suivante", onclick: function () { journalShift(1); } }, icon("back", 20)));
+
+    var view = J.view === "semaine" ? { body: weekView(weekStart(d0)), extra: null } : J.view === "mois" ? monthView(monthStart(d0)) : dayView(d0, isToday, canWrite);
+    var body = view.body;
     body.classList.add("jbody");
     if (dayDir) body.classList.add(dayDir > 0 ? "enter-r" : "enter-l");
-    // Glisser à gauche ou à droite sur la frise ou la liste pour changer de jour
+    // Glisser à gauche ou à droite pour changer de jour, de semaine ou de mois
     (function (el) {
       var x0 = null, y0 = 0, mode = null;
       el.addEventListener("pointerdown", function (ev) { if (ev.button || ev.target.closest(".swipe")) return; x0 = ev.clientX; y0 = ev.clientY; mode = null; });
@@ -1203,32 +1486,103 @@
         if (x0 == null || mode) return;
         var mx = ev.clientX - x0, my = ev.clientY - y0;
         if (Math.abs(my) > 12 && Math.abs(my) > Math.abs(mx)) { x0 = null; return; }
-        if (Math.abs(mx) > 60) { mode = "h"; var i2 = days.indexOf(d0) + (mx < 0 ? 1 : -1); x0 = null; if (i2 >= 0 && i2 < days.length) journalGo(days[i2]); }
+        if (Math.abs(mx) > 60) { mode = "h"; x0 = null; journalShift(mx < 0 ? 1 : -1); }
       });
       el.addEventListener("pointerup", function () { x0 = null; });
       el.addEventListener("pointercancel", function () { x0 = null; });
     })(body);
+
     mount(h("main", { class: "screen" },
       h("div", { class: "row between", vars: { "align-items": "flex-end" } },
         h("div", { class: "stack", vars: { gap: "2px" } }, h("span", { class: "eyebrow", text: S.child ? S.child.first_name + (ageLabel(S.child) ? " · " + ageLabel(S.child) : "") : "" }), h("h1", { class: "title-l", text: "Journal" })),
-        seg),
-      picker, body,
-      h("section", { class: "card green sum" },
-        h("span", { class: "eyebrow", text: isToday ? "Depuis minuit" : dayLabel(d0) }),
-        h("div", { class: "sum-grid" },
-          sum(feedsN + " repas", breast ? dur(breast) + " au sein" : "aucune tétée chronométrée"),
-          sum(wetN + " + " + pooN, "couches mouillées + selles"),
-          sum(dur(sleepM), "de sommeil"),
-          sum(cryM >= 1 ? dur(cryM) : "0 min", "de pleurs, " + cries.length + " épisode" + (cries.length > 1 ? "s" : ""))))));
+        canWrite && S.family ? h("button", { class: "btn primary small add-rdv", onclick: function () { sheetAppt(null, { date: J.view === "jour" || J.view === "mois" ? d0 : Date.now() }); } }, icon("plus", 18), "Rendez-vous") : null),
+      seg, nav, body, view.extra));
     appEl.append(dock("journal", canWrite));
     // Aujourd'hui : la frise défile jusqu'à l'heure actuelle
-    if (isToday && J.view === "frise" && (ENTER || dayDir)) {
+    if (J.view === "jour" && isToday && !J.list && (ENTER || dayDir)) {
       setTimeout(function () {
         var now = appEl.querySelector(".tl-now"); if (!now) return;
         var y = now.getBoundingClientRect().top + window.scrollY - window.innerHeight * 0.45;
         if (y > 0) window.scrollTo({ top: y, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
       }, dayDir ? 120 : 420);
     }
+  }
+
+  /* ---------- Famille : abonnement agenda ---------- */
+  function agendaSection() {
+    var isParent = S.role === "parent";
+    var box = h("div", { class: "stack" }), feed = null, opts = { summary: false, events: false };
+    var feedUrl = function (tok) { return CFG.supabaseUrl + "/functions/v1/ical/" + tok + ".ics"; };
+    var confirmBtn = function (txt, confirmTxt, fn) {
+      var armed = false, b = h("button", { class: "btn ghost full danger", text: txt });
+      b.addEventListener("click", function () {
+        if (!armed) { armed = true; b.textContent = confirmTxt; setTimeout(function () { armed = false; b.textContent = txt; }, 4000); return; }
+        fn();
+      });
+      return b;
+    };
+    async function create() {
+      var r = await sb.rpc("api_v1_create_calendar_feed", { p_family: S.family.id });
+      if (r.error) { toast(errMsg(r.error), { error: true }); return; }
+      lsSet("gloups.feed." + S.family.id, r.data);
+      feed = { created_at: new Date().toISOString(), revoked_at: null, options: feed && feed.options };
+      draw();
+    }
+    async function revoke() {
+      var r = await sb.rpc("api_v1_revoke_calendar_feed", { p_family: S.family.id });
+      if (r.error) { toast(errMsg(r.error), { error: true }); return; }
+      lsSet("gloups.feed." + S.family.id, null);
+      if (feed) feed.revoked_at = new Date().toISOString();
+      toast("Lien coupé : les agendas abonnés ne reçoivent plus rien.");
+      draw();
+    }
+    async function setOpt(k, v) {
+      opts[k] = v;
+      var r = await sb.rpc("api_v1_set_calendar_feed_options", { p_family: S.family.id, p_summary: opts.summary, p_events: opts.events });
+      if (r.error) toast(errMsg(r.error), { error: true });
+    }
+    function draw() {
+      var name = S.child ? S.child.first_name : "votre enfant";
+      if (!isParent) {
+        box.replaceChildren(h("p", { class: "small", text: "Un parent peut abonner l'agenda de la famille. Chaque rendez-vous a aussi un bouton « Ajouter à Google Agenda »." }));
+        return;
+      }
+      var active = feed && !feed.revoked_at, tok = lsGet("gloups.feed." + S.family.id);
+      if (feed && feed.options) { opts.summary = !!feed.options.summary; opts.events = !!feed.options.events; }
+      if (!active) {
+        box.replaceChildren(
+          h("p", { class: "small", text: "Un lien privé à ajouter une seule fois dans Google Agenda ou l'agenda de l'iPhone. Chaque rendez-vous créé, déplacé ou annulé dans Gloups suit tout seul." }),
+          h("button", { class: "btn primary full", onclick: create, text: "Créer le lien d'abonnement" }));
+        return;
+      }
+      var parts = [];
+      if (tok) {
+        var https = feedUrl(tok), webcal = https.replace(/^https:/, "webcal:");
+        parts.push(
+          h("a", { class: "btn primary full", href: "https://calendar.google.com/calendar/r?cid=" + encodeURIComponent(webcal), target: "_blank", rel: "noopener" }, "Ajouter à Google Agenda"),
+          h("div", { class: "big2" },
+            h("a", { class: "btn", href: webcal }, "Agenda iPhone"),
+            h("button", { class: "btn", onclick: function () { navigator.clipboard.writeText(https).then(function () { toast("Lien copié. Gardez-le privé."); }); }, text: "Copier le lien" })),
+          h("p", { class: "small muted", text: "Google Agenda : ouvrez ce bouton de préférence sur un ordinateur, l'app mobile Google Agenda ne sait pas s'abonner. L'agenda apparaît ensuite sur le téléphone." }));
+      } else {
+        parts.push(h("p", { class: "small", text: "Abonnement actif depuis le " + new Date(feed.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + ". Le lien complet ne s'affiche que sur l'appareil qui l'a créé." }),
+          confirmBtn("Créer un nouveau lien ici", "Confirmer : l'ancien lien cessera de fonctionner", create));
+      }
+      parts.push(
+        h("span", { class: "eyebrow", text: "Ce qui apparaît dans votre agenda" }),
+        h("div", { class: "switch-row static" }, h("span", { class: "grow" }, h("b", { text: "Rendez-vous" }), h("span", { class: "small muted", text: "pédiatre, sage-femme, vaccins, PMI, examens" })), h("span", { class: "small", text: "Toujours" })),
+        switchBtn(opts.summary, "Résumé de la journée", "un événement par jour : repas, couches, sommeil", function (v) { setOpt("summary", v); }),
+        switchBtn(opts.events, "Toutes les saisies", "chaque tétée, couche et sieste (très chargé)", function (v) { setOpt("events", v); }),
+        h("div", { class: "card soft small", text: "Google Agenda relit ce lien à son rythme : un changement peut mettre plusieurs heures à apparaître, parfois jusqu'à une journée, sans moyen de forcer la mise à jour. L'agenda de l'iPhone suit son propre réglage de rafraîchissement." }),
+        confirmBtn("Couper le lien", "Confirmer : couper le lien pour tous les agendas", revoke));
+      box.replaceChildren.apply(box, parts);
+    }
+    if (isParent) {
+      sb.from("calendar_feeds").select("created_at, revoked_at, options").eq("family_id", S.family.id).maybeSingle().then(function (r) { feed = r.data || null; draw(); });
+      box.append(h("span", { class: "small muted", text: "Chargement..." }));
+    } else draw();
+    return h("section", { class: "card" }, h("b", { class: "title-m", text: "Agenda et Google Agenda" }),
+      h("p", { class: "small muted", text: "Retrouvez les rendez-vous dans votre agenda habituel, sans rien ressaisir." }), box);
   }
 
   /* ---------- Écran : famille ---------- */
@@ -1269,6 +1623,7 @@
       h("section", { class: "card" }, h("b", { class: "title-m", text: "Membres" }),
         S.members.map(function (m) { return h("div", { class: "member" }, h("span", { class: "avatar", text: initials(S.profiles[m.user_id]) }), h("span", { class: "grow", text: S.profiles[m.user_id] + (m.user_id === S.user.id ? " (vous)" : "") }), h("span", { class: "role", text: roleLbl[m.role] })); })),
       isParent ? h("section", { class: "card green" }, h("b", { class: "title-m", text: "Inviter quelqu'un" }), invite) : null,
+      agendaSection(),
       h("section", { class: "card" }, h("b", { class: "title-m", text: "Cet appareil" }),
         h("a", { href: "#/installer", class: "btn full", text: isStandalone() ? "App installée ✓" : "Installer sur l'écran d'accueil" }),
         h("button", { class: "btn full", onclick: signOut, text: "Se déconnecter" }),
@@ -1389,6 +1744,7 @@
         await loadMemberships();
         await loadFamily();
         await loadEvents();
+        await loadAppts();
         subscribe();
       }
     } catch (e) {
