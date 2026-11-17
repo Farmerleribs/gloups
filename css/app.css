@@ -137,6 +137,7 @@ textarea.input { padding: 12px 14px; min-height: 90px; resize: vertical; }
 .item .what span { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item .badge { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .item .del { width: 40px; height: 40px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); flex: none; }
+.sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; white-space: nowrap !important; border: 0 !important; }
 .empty { color: var(--muted); font-size: 14px; padding: 6px 0; }
 
 /* Barre du bas : onglets avec une place au centre pour le bouton + */
@@ -200,8 +201,11 @@ html.fab-open, html.fab-open body { overflow: hidden; }
 @keyframes gl-toast { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
 
 /* Feuilles (saisies) */
-.backdrop { position: fixed; inset: 0; background: rgba(30,42,36,.35); z-index: 40; display: flex; align-items: flex-end; justify-content: center; }
-.sheet { width: 100%; max-width: 520px; max-height: 88dvh; overflow-y: auto; background: var(--bg); border-radius: 26px 26px 0 0; padding: 10px 18px calc(22px + var(--safe-bottom)); display: flex; flex-direction: column; gap: 14px; }
+.backdrop { --dim: 1; position: fixed; inset: 0; background: rgba(30,42,36,calc(.35 * var(--dim))); z-index: 55; display: flex; align-items: flex-end; justify-content: center; animation: gl-fade .25s ease both; }
+.backdrop.closing { animation: gl-fade-out .24s ease both; pointer-events: none; }
+.sheet { animation: gl-sheet-in .5s cubic-bezier(.34,1.25,.64,1); transition: transform .3s cubic-bezier(.2,.8,.2,1); overscroll-behavior: contain; width: 100%; max-width: 520px; max-height: 88dvh; overflow-y: auto; background: var(--bg); border-radius: 26px 26px 0 0; padding: 10px 18px calc(22px + var(--safe-bottom)); display: flex; flex-direction: column; gap: 14px; }
+.sheet.dragging { transition: none; }
+.backdrop.closing .sheet { animation: gl-sheet-out .24s cubic-bezier(.4,0,1,1) forwards; }
 .sheet .grab { width: 40px; height: 5px; border-radius: 3px; background: #D5CCBA; align-self: center; }
 .big3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .big2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
@@ -351,3 +355,85 @@ html.fab-open, html.fab-open body { overflow: hidden; }
 .sum-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
 .sum-grid b { font-size: 22px; font-weight: 650; letter-spacing: -0.02em; }
 .sum-grid span { font-size: 12.5px; color: #D7E3DB; }
+
+/* ---------- Animations (v0.5.0) ---------- */
+@keyframes gl-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes gl-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes gl-sheet-in { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes gl-sheet-out { to { transform: translateY(100%); } }
+@keyframes gl-pop { 0% { scale: 1; } 40% { scale: 1.12; } 100% { scale: 1; } }
+@keyframes gl-in-r { from { opacity: 0; translate: 28px 0; } to { opacity: 1; translate: 0 0; } }
+@keyframes gl-in-l { from { opacity: 0; translate: -28px 0; } to { opacity: 1; translate: 0 0; } }
+@keyframes gl-in-up { from { opacity: 0; translate: 0 10px; } to { opacity: 1; translate: 0 0; } }
+@keyframes gl-grow-x { from { scale: 0 1; } to { scale: 1 1; } }
+@keyframes gl-grow-y { from { scale: 1 0; } to { scale: 1 1; } }
+@keyframes gl-drop { 0% { opacity: 0; translate: 0 -14px; scale: .4; } 70% { opacity: 1; translate: 0 2px; scale: 1.1; } 100% { opacity: 1; translate: 0 0; scale: 1; } }
+@keyframes gl-dot-pop { 0% { scale: 0; } 55% { scale: 1.9; } 100% { scale: 1; } }
+@keyframes gl-roll { 0% { translate: 0 110%; opacity: 0; } 100% { translate: 0 0; opacity: 1; } }
+@keyframes gl-fresh { 0% { max-height: 0; opacity: 0; background: var(--repas-bg); } 35% { max-height: 90px; opacity: 1; background: var(--repas-bg); } 100% { max-height: 90px; opacity: 1; background: var(--card); } }
+@keyframes gl-wipe { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes gl-ring { from { stroke-dashoffset: 100; } }
+@keyframes gl-due { 0%, 100% { box-shadow: 0 0 0 0 rgba(90,80,160,0); } 50% { box-shadow: 0 0 0 9px rgba(90,80,160,.16); } }
+
+/* 1. Changement d'onglet et trait sous l'onglet actif */
+main.screen.enter-r { animation: gl-in-r .34s cubic-bezier(.2,.8,.2,1) both; }
+main.screen.enter-l { animation: gl-in-l .34s cubic-bezier(.2,.8,.2,1) both; }
+main.screen.enter-fade { animation: gl-fade .25s ease both; }
+.dock { position: relative; }
+.tab-ind { position: absolute; left: 0; bottom: calc(4px + var(--safe-bottom)); width: 20px; height: 3px; border-radius: 2px; background: var(--green); opacity: 0; transition: transform .45s cubic-bezier(.34,1.45,.64,1); pointer-events: none; }
+.tab-ind.on { opacity: 1; }
+.tab-ind.moving { animation: gl-stretch .38s ease; }
+@keyframes gl-stretch { 50% { scale: 2.2 1; } }
+
+/* 2. La frise se dessine */
+.strip .now { animation: gl-breath 1.8s ease-in-out infinite; }
+.strip.draw .seg-sleep { transform-origin: left center; animation: gl-grow-x .6s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(80ms + var(--i, 0) * 50ms); }
+.strip.draw .dot-feed, .strip.draw .dot-diaper { animation: gl-drop .5s cubic-bezier(.34,1.4,.64,1) both; animation-delay: calc(200ms + var(--i, 0) * 40ms); }
+.counts.enter > div { animation: gl-in-up .4s cubic-bezier(.2,.8,.2,1) both; }
+.counts.enter > div:nth-child(2) { animation-delay: 60ms; } .counts.enter > div:nth-child(3) { animation-delay: 120ms; } .counts.enter > div:nth-child(4) { animation-delay: 180ms; }
+
+/* 3. Saisie confirmée */
+.strip .pop { animation: gl-dot-pop .6s cubic-bezier(.34,1.56,.64,1) both; animation-delay: calc(250ms + var(--age, 0ms)); }
+.strip .seg-sleep.pop { transform-origin: left center; animation: gl-grow-x .6s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(250ms + var(--age, 0ms)); }
+.tile .vbox { display: block; overflow: hidden; }
+.tile .v { display: block; }
+.tile.roll .v { animation: gl-roll .55s cubic-bezier(.34,1.4,.64,1) both; animation-delay: calc(200ms + var(--age, 0ms)); }
+.item.fresh { overflow: hidden; border-radius: 10px; animation: gl-fresh 1.4s cubic-bezier(.2,.8,.2,1) both; animation-delay: var(--age, 0ms); }
+
+/* 4. Feuilles : rebond sur le choix */
+.chip.pop, .seg button.pop, .colors button.pop { animation: gl-pop .32s cubic-bezier(.34,1.56,.64,1); }
+
+/* 5. Glisser pour supprimer */
+.swipe { position: relative; overflow: hidden; border-bottom: 1px solid #EFE8DA; transition: height .28s cubic-bezier(.2,.8,.2,1); }
+.swipe:last-child { border-bottom: 0; }
+.swipe .item { -webkit-user-select: none; user-select: none; position: relative; border-bottom: 0; background: var(--card); touch-action: pan-y; transition: transform .3s cubic-bezier(.2,.8,.2,1); }
+.swipe.moving .item { transition: none; }
+.swipe-bg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; padding-right: 22px; background: #E7B5AA; color: #fff; border-radius: 10px; transition: background .15s ease; }
+.swipe.armed .swipe-bg, .swipe.gone .swipe-bg { background: #B04A3A; }
+.swipe.gone { height: 0 !important; border-bottom-color: transparent; }
+
+/* 6. Tendances */
+.bars.rise .fill { transform-origin: bottom center; animation: gl-grow-y .6s cubic-bezier(.34,1.3,.64,1) both; animation-delay: calc(120ms + var(--i, 0) * 55ms); }
+.wchart.rise .wsvg { animation: gl-wipe 1s cubic-bezier(.4,0,.2,1) .2s both; }
+.wchart.rise .wdot { animation: gl-dot-pop .45s cubic-bezier(.34,1.56,.64,1) .9s both; }
+.heat.rise .hrow { animation: gl-in-up .4s ease both; animation-delay: calc(var(--i, 0) * 50ms); }
+
+/* 7. Anneau de la prochaine sieste */
+.nap-dial { position: relative; width: 72px; height: 72px; flex: none; display: flex; align-items: center; justify-content: center; }
+.nap-ring { position: absolute; inset: 0; width: 72px; height: 72px; transform: rotate(-90deg); }
+.nap-ring circle { fill: none; stroke-width: 5; }
+.nap-track { stroke: #CFC8EE; }
+.nap-prog { stroke: #5A50A0; stroke-linecap: round; stroke-dasharray: 100; stroke-dashoffset: var(--off, 100); transition: stroke-dashoffset .6s ease; }
+.nap-ring.draw .nap-prog { animation: gl-ring 1.1s cubic-bezier(.2,.8,.2,1) .2s both; }
+.nap-dial .nap-btn { width: 50px; height: 50px; border-radius: 50%; }
+.nap.due { animation: gl-due 2.6s ease-in-out infinite; }
+
+/* 8. Journal */
+.days { position: relative; }
+.days-bg { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; pointer-events: none; }
+.days-bg span { border-radius: 16px; background: var(--card); }
+.days-ind { position: absolute; top: 0; left: 0; height: 100%; width: calc((100% - 36px) / 7); border-radius: 16px; background: var(--green); pointer-events: none; transform: translateX(calc(var(--i, 6) * (100% + 6px))); transition: transform .42s cubic-bezier(.34,1.3,.64,1); }
+.days button, .days button[aria-pressed="true"] { position: relative; background: transparent; transition: color .25s ease; }
+.jbody { touch-action: pan-y; -webkit-user-select: none; user-select: none; }
+.jbody.enter-r { animation: gl-in-r .32s cubic-bezier(.2,.8,.2,1) both; }
+.jbody.enter-l { animation: gl-in-l .32s cubic-bezier(.2,.8,.2,1) both; }
