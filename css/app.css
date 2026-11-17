@@ -517,3 +517,14 @@ main.screen.enter-fade { animation: gl-fade .25s ease both; }
 
 /* Pas de zoom ni de déplacement latéral de la page (v0.6.1) */
 body { touch-action: pan-y; overflow-x: hidden; overscroll-behavior-x: none; }
+
+/* ---------- v0.6.2 : écran figé, glissement entre onglets qui suit le doigt ---------- */
+.peek-layer { position: fixed; inset: 0; z-index: 15; pointer-events: none; overflow: hidden; }
+.peek { position: absolute; inset: 0; overflow: hidden; background: var(--bg); will-change: transform; }
+.peek > main.screen { animation: none !important; }
+.peek .strip *, .peek .bars *, .peek .counts * { animation: none !important; }
+/* Feuilles et menus : rien ne bouge en dehors du défilement vertical voulu */
+.backdrop, .fab-bd { touch-action: none; overscroll-behavior: none; }
+.sheet { touch-action: pan-y; overscroll-behavior: none; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
+.peek-layer, .peek { touch-action: none; }
+html.sheet-open, html.sheet-open body { overflow: hidden; }
