@@ -28,7 +28,7 @@
 }
 
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: pan-y; overflow-x: hidden; overscroll-behavior: none; }
 body {
   margin: 0;
   background: var(--bg);
@@ -514,3 +514,6 @@ main.screen.enter-fade { animation: gl-fade .25s ease both; }
 .mo-dots .s { background: #9B92D6; } .mo-dots .f { background: #A8661A; } .mo-dots .c { background: #2B7262; }
 .mo-appt { max-width: 100%; box-sizing: border-box; padding: 1px 4px; border-radius: 5px; background: #264F80; color: #fff; font-size: 9px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mo-more { font-size: 9px; color: var(--muted); font-weight: 700; }
+
+/* Pas de zoom ni de déplacement latéral de la page (v0.6.1) */
+body { touch-action: pan-y; overflow-x: hidden; overscroll-behavior-x: none; }
