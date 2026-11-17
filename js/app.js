@@ -81,12 +81,23 @@
     drop: "M12 3s6 7 6 11a6 6 0 0 1-12 0c0-4 6-11 6-11z",
     bottle: "M10 2h4M10 2v3M14 2v3M8 5h8v2H8zM8 7h8l1 3v10a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V10z",
     back: "M15 5l-7 7 7 7",
-    dots: "M5 12h.01M12 12h.01M19 12h.01"
+    dots: "M5 12h.01M12 12h.01M19 12h.01",
+    diaper: "M3 7h18v2.5A9 9 0 0 1 12 18.5A9 9 0 0 1 3 9.5zM8 7v3M16 7v3",
+    wave: "M3 12h3l2-5 3 10 3-8 2 3h5",
+    bath: "M4 12h16v3a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5zM6 12V6a2 2 0 0 1 4 0",
+    temp: "M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z",
+    scale: "M6 7h12l2 13H4zM9 7a3 3 0 0 1 6 0",
+    note: "M5 4h14v16H5zM8 9h8M8 13h8M8 17h5",
+    swap: "M7 7h11l-3-3M17 17H6l3 3",
+    home: "M4 11l8-7 8 7v9H4zM10 20v-5h4v5",
+    list: "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
+    chart: "M5 20V11M12 20V5M19 20v-8",
+    family: "M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2 20c0-3 3-5 6-5s6 2 6 5M14 15.5c3 0 8 1 8 4.5"
   };
   function icon(name, size) {
     var s = document.createElementNS(SVGNS, "svg");
     s.setAttribute("width", size || 22); s.setAttribute("height", size || 22); s.setAttribute("viewBox", "0 0 24 24");
-    s.setAttribute("fill", "none"); s.setAttribute("stroke", "currentColor"); s.setAttribute("stroke-width", name === "dots" ? "3.2" : "2");
+    s.setAttribute("fill", "none"); s.setAttribute("stroke", "currentColor"); s.setAttribute("stroke-width", name === "dots" ? "3.2" : name === "plus" ? "2.4" : "2");
     s.setAttribute("stroke-linecap", "round"); s.setAttribute("stroke-linejoin", "round"); s.setAttribute("aria-hidden", "true");
     var p = document.createElementNS(SVGNS, "path"); p.setAttribute("d", ICONS[name]); s.appendChild(p);
     return s;
@@ -187,7 +198,7 @@
   var appEl = document.getElementById("app");
   var sheetRoot = document.getElementById("sheet-root");
   var toastRoot = document.getElementById("toast-root");
-  function mount(node) { appEl.replaceChildren(node); window.scrollTo(0, 0); }
+  function mount(node) { if (fab.el) fabSync(false); appEl.replaceChildren(node); window.scrollTo(0, 0); }
 
   var toastTimer = null;
   function toast(msg, opts) {
@@ -208,7 +219,7 @@
     var bd = h("div", { class: "backdrop", onclick: function (e) { if (e.target === bd) closeSheet(); } }, sheet);
     sheetRoot.replaceChildren(bd);
   }
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeSheet(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") { closeSheet(); if (fab.level) fabLevel(null); } });
 
   /* ---------- Données ---------- */
   async function loadProfile() {
@@ -467,28 +478,11 @@
     var lastDiaper = lastOf(function (e) { return e.type === "diaper"; });
     var lastSleep = lastOf(function (e) { return e.type === "sleep"; });
     var sleeping = running().find(function (e) { return e.type === "sleep"; });
-    var lastBreast = S.events.find(function (e) { return e.type === "feed.breast"; });
-    var suggested = lastBreast ? (lastBreast.data.side === "left" ? "right" : lastBreast.data.side === "right" ? "left" : null) : null;
     var sleepMin = evToday.filter(function (e) { return e.type === "sleep"; }).reduce(function (s, e) {
       var a = Math.max(new Date(e.started_at).getTime(), today), b = e.ended_at ? new Date(e.ended_at).getTime() : Date.now();
       return s + Math.max(0, b - a) / 60000;
     }, 0);
     var canWrite = S.role === "parent" || S.role === "proche";
-
-    var lives = running().map(function (ev) {
-      var t = h("div", { class: "time", "data-start": ev.started_at, text: clock((Date.now() - new Date(ev.started_at)) / 1000) });
-      var actions = h("div", { class: "actions" });
-      if (canWrite) {
-        if (ev.type === "feed.breast" && ev.data.side !== "both") actions.append(h("button", { class: "btn light", onclick: async function () {
-          var stopped = await stopEvent(ev); if (!stopped) return;
-          await logEvent("feed.breast", { side: ev.data.side === "left" ? "right" : "left" }, { running: true });
-        }, text: "Changer de côté" }));
-        actions.append(h("button", { class: "btn light", onclick: function () { stopEvent(ev).then(function (x) { if (x) toast(label(x) + " · " + dur((new Date(x.ended_at) - new Date(x.started_at)) / 60000)); }); }, text: ev.type === "sleep" ? "Il se réveille" : "Terminer" }));
-      }
-      return h("section", { class: "live", "aria-label": "En cours" },
-        h("div", { class: "head" }, h("span", { text: label(ev) + " en cours" }), h("span", { class: "since", text: "depuis " + hhmm(ev.started_at) + " · " + (S.profiles[ev.created_by] || "") })),
-        t, actions);
-    });
 
     var tile = function (k, color, v, s, onclick) {
       return h("button", { class: "tile", onclick: onclick, disabled: !canWrite },
@@ -506,7 +500,6 @@
             h("span", { class: "dot" }), h("span", { class: "name", text: c.first_name }), S.children.length > 1 ? h("span", { class: "muted", vars: { "font-size": "20px" }, text: "▾" }) : null),
           h("span", { class: "small muted", text: ageLabel(c) })),
         h("a", { href: "#/famille", class: "row", "aria-label": "Famille et réglages", vars: { "text-decoration": "none", gap: "0" } }, membersInit)),
-      lives,
       !sleeping ? napCard(canWrite) : null,
       h("section", { class: "stack", vars: { gap: "8px" } },
         h("span", { class: "eyebrow", text: "Depuis le dernier" }),
@@ -523,10 +516,10 @@
           h("div", null, h("b", { text: evToday.filter(function (e) { return e.type === "diaper" && e.data.pee; }).length }), h("span", { vars: { color: CAT_COLOR.couche }, text: "mouillées" })),
           h("div", null, h("b", { text: evToday.filter(function (e) { return e.type === "diaper" && e.data.poo; }).length }), h("span", { vars: { color: CAT_COLOR.couche }, text: "selles" })),
           h("div", null, h("b", { text: dur(sleepMin).replace(NB + "h" + NB, "h") }), h("span", { vars: { color: CAT_COLOR.sommeil }, text: "sommeil" }))),
-        h("div", { class: "list" }, recent.length ? recent.map(function (e) { return eventRow(e, canWrite); }) : h("span", { class: "empty", text: "Pas encore de saisie. Utilisez les boutons en bas, elles s'afficheront sur la frise." }))),
+        h("div", { class: "list" }, recent.length ? recent.map(function (e) { return eventRow(e, canWrite); }) : h("span", { class: "empty", text: "Pas encore de saisie. Touchez le bouton + en bas, elles s'afficheront sur la frise." }))),
       !isStandalone() && !lsGet("gloups.installHidden") ? h("a", { href: "#/installer", class: "card ok", vars: { "text-decoration": "none" } }, h("b", { text: "Installer Gloups sur l'écran d'accueil" }), h("span", { class: "small", text: "Plein écran, plus rapide, un tap pour noter." })) : null
     ));
-    appEl.append(dock("home", canWrite, suggested));
+    appEl.append(dock("home", canWrite));
   }
 
   function eventRow(e, canWrite) {
@@ -538,34 +531,151 @@
       canWrite ? h("button", { class: "del", "aria-label": "Supprimer " + label(e), onclick: function () { removeEvent(e); } }, icon("trash", 18)) : null);
   }
 
-  function dock(active, canWrite, suggested) {
-    var q = function (cls, txt, lbl, fn, tag) {
-      return h("button", { class: "q " + cls, onclick: fn, disabled: !canWrite },
-        tag ? h("span", { class: "tag", text: tag }) : null,
-        h("span", { class: "ic", text: txt }), h("span", { class: "lbl", text: lbl }));
+  /* ---------- Barre du bas : onglets et bouton central qui éclot ---------- */
+  function dock(active, canWrite) {
+    var tab = function (href, ic, txt, key) {
+      return h("a", { href: href, "aria-current": active === key ? "page" : null }, icon(ic, 22), h("span", { text: txt }));
     };
-    var startBreast = function (side) {
-      return async function () {
-        var cur = running().find(function (e) { return e.type === "feed.breast"; });
-        if (cur) { await stopEvent(cur); }
-        logEvent("feed.breast", { side: side }, { running: true });
-      };
-    };
-    var quick = h("div", { class: "quick" },
-      q("repas", "G", "Sein G", startBreast("left"), suggested === "left" ? "suggéré" : null),
-      q("repas", "D", "Sein D", startBreast("right"), suggested === "right" ? "suggéré" : null),
-      q("repas", "", "Biberon", sheetBottle),
-      q("couche", "", "Couche", sheetDiaper),
-      q("sommeil", "", "Sommeil", sheetSleep),
-      q("plus", "", "Plus", sheetPlus));
-    quick.children[2].querySelector(".ic").append(icon("bottle", 22));
-    quick.children[3].querySelector(".ic").append(icon("drop", 22));
-    quick.children[4].querySelector(".ic").append(icon("moon", 22));
-    quick.children[5].querySelector(".ic").append(icon("plus", 22));
-    var tab = function (href, txt, key) { return h("a", { href: href, "aria-current": active === key ? "page" : null, text: txt }); };
-    return h("div", { class: "dock-wrap" }, h("nav", { class: "dock", "aria-label": "Saisie rapide et navigation" },
-      active === "home" ? quick : null,
-      h("div", { class: "tabs" }, tab("#/", "Aujourd'hui", "home"), tab("#/journal", "Journal", "journal"), tab("#/tendances", "Tendances", "tendances"), tab("#/famille", "Famille", "famille"))));
+    fabSync(true, canWrite);
+    return h("div", { class: "dock-wrap" }, h("nav", { class: "dock" + (canWrite ? " has-fab" : ""), "aria-label": "Navigation principale" },
+      tab("#/", "home", "Aujourd'hui", "home"), tab("#/journal", "list", "Journal", "journal"),
+      canWrite ? h("span", { class: "fab-gap", "aria-hidden": "true" }) : null,
+      tab("#/tendances", "chart", "Tendances", "tendances"), tab("#/famille", "family", "Famille", "famille")));
+  }
+
+  // Bulles : libellé, couleur, icône (ou lettre), diamètre
+  var BUB = {
+    repas: ["Repas", "repas", "bottle", 60], sommeil: ["Sommeil", "sommeil", "moon", 60], couche: ["Couche", "couche", "diaper", 60],
+    pleurs: ["Pleurs", "pleurs", "wave", 60], plus: ["Plus", "neutre", "dots", 60],
+    g: ["Sein gauche", "repas", "G", 78], d: ["Sein droit", "repas", "D", 78], biberon: ["Biberon", "repas", "bottle", 58], tirelait: ["Tire-lait", "repas", "drop", 58],
+    pipi: ["Pipi", "couche", "drop", 64], deux: ["Les deux", "couche", "diaper", 64], selles: ["Selles", "couche", "diaper", 64],
+    bain: ["Bain", "sante", "bath", 56], temp: ["Température", "sante", "temp", 56], poids: ["Poids", "sante", "scale", 56], note: ["Note", "neutre", "note", 56]
+  };
+  function arc(ids) {
+    var o = {}, n = ids.length;
+    ids.forEach(function (id, i) { var a = (155 - 130 * i / (n - 1)) * Math.PI / 180; o[id] = [Math.round(135 * Math.cos(a)), Math.round(-150 * Math.sin(a))]; });
+    return o;
+  }
+  var LEVELS = {
+    root: arc(["repas", "sommeil", "couche", "pleurs", "plus"]),
+    repas: { g: [-92, -112], d: [92, -112], biberon: [-46, -218], tirelait: [46, -218] },
+    couche: { pipi: [-104, -96], deux: [0, -168], selles: [104, -96] },
+    plus: arc(["bain", "temp", "poids", "note"])
+  };
+  var QUESTION = { root: "Que se passe-t-il ?", repas: "Quel repas ?", couche: "Quelle couche ?", plus: "Autre saisie" };
+  var fab = { el: null, level: null, canWrite: false, bubbles: {}, pills: {} };
+
+  function suggestedSide() {
+    var last = S.events.find(function (e) { return e.type === "feed.breast"; });
+    return last ? (last.data.side === "left" ? "right" : last.data.side === "right" ? "left" : null) : null;
+  }
+  function runningOf(type) { return running().find(function (e) { return e.type === type; }); }
+  function stopWithToast(ev) {
+    stopEvent(ev).then(function (x) { if (x) toast(label(x) + " · " + dur((new Date(x.ended_at) - new Date(x.started_at)) / 60000)); });
+  }
+  function fabAction(id) {
+    var go = function (l) { fabLevel(l); };
+    var then = function (fn) { fabLevel(null); fn(); };
+    switch (id) {
+      case "repas": case "couche": case "plus": go(id); return;
+      case "sommeil": then(function () { var c = runningOf("sleep"); if (c) stopWithToast(c); else logEvent("sleep", {}, { running: true }); }); return;
+      case "pleurs": then(function () { var c = runningOf("cry"); if (c) stopWithToast(c); else logEvent("cry", {}, { running: true }); }); return;
+      case "g": then(function () { dockBreast("left"); }); return;
+      case "d": then(function () { dockBreast("right"); }); return;
+      case "biberon": then(sheetBottle); return;
+      case "tirelait": then(sheetPump); return;
+      case "pipi": then(function () { logEvent("diaper", { pee: true, poo: false }); }); return;
+      case "selles": then(function () { logEvent("diaper", { pee: false, poo: true }); }); return;
+      case "deux": then(function () { logEvent("diaper", { pee: true, poo: true }); }); return;
+      case "bain": then(function () { logEvent("bath", {}); }); return;
+      case "temp": then(sheetTemp); return;
+      case "poids": then(sheetWeight); return;
+      case "note": then(sheetNote); return;
+    }
+  }
+  function fabBuild() {
+    var bd = h("div", { class: "fab-bd", onclick: function () { fabLevel(null); } });
+    var q = h("div", { class: "fab-q", "aria-hidden": "true" });
+    var layer = h("div", { class: "fab-bubbles" });
+    Object.keys(BUB).forEach(function (id) {
+      var b = BUB[id];
+      var disc = h("span", { class: "disc" }, b[2].length === 1 ? h("b", { text: b[2] }) : icon(b[2], b[3] > 60 ? 26 : 24),
+        id === "g" || id === "d" ? h("span", { class: "sug", text: "suggéré" }) : null);
+      var lbl = h("span", { class: "lbl", text: b[0] });
+      var btn = h("button", { class: "bub c-" + b[1], tabindex: "-1", "aria-hidden": "true", vars: { "--d": b[3] + "px" }, onclick: function () { fabAction(id); } }, disc, lbl);
+      fab.bubbles[id] = { btn: btn, lbl: lbl };
+      layer.append(btn);
+    });
+    var btn = h("button", { class: "fab", "aria-label": "Nouvelle saisie", "aria-expanded": "false", onclick: function () { fabLevel(fab.level === "root" ? null : "root"); } }, h("span", { class: "rot" }, icon("plus", 30)));
+    var pills = h("div", { class: "pills", role: "group", "aria-label": "Activités en cours" });
+    fab.el = h("div", { class: "fab-root" }, pills, bd, q, layer, btn);
+    fab.parts = { bd: bd, q: q, btn: btn, pills: pills };
+    document.body.append(fab.el);
+  }
+  function fabLevel(l) {
+    if (!fab.el) return;
+    if (l && !fab.canWrite) l = null;
+    fab.level = l;
+    var cur = l ? LEVELS[l] : {}, keys = Object.keys(cur);
+    var k = Math.min(1, Math.max(0.72, (window.innerWidth / 2 - 52) / 135));
+    var sug = suggestedSide(), sleeping = runningOf("sleep"), crying = runningOf("cry");
+    fab.bubbles.sommeil.lbl.textContent = sleeping ? "Réveil" : "Sommeil";
+    fab.bubbles.pleurs.lbl.textContent = crying ? "Fin des pleurs" : "Pleurs";
+    Object.keys(fab.bubbles).forEach(function (id) {
+      var b = fab.bubbles[id], p = cur[id], on = !!p;
+      b.btn.style.setProperty("--x", (on ? p[0] * k : 0) + "px");
+      b.btn.style.setProperty("--y", (on ? p[1] : 24) + "px");
+      b.btn.style.setProperty("--dl", (on ? keys.indexOf(id) * 40 : 0) + "ms");
+      b.btn.classList.toggle("on", on);
+      b.btn.classList.toggle("is-sug", (id === "g" && sug === "left") || (id === "d" && sug === "right"));
+      b.btn.tabIndex = on ? 0 : -1;
+      b.btn.setAttribute("aria-hidden", on ? "false" : "true");
+    });
+    fab.parts.q.textContent = l ? QUESTION[l] : "";
+    fab.el.classList.toggle("open", !!l);
+    document.documentElement.classList.toggle("fab-open", !!l);
+    fab.parts.btn.setAttribute("aria-expanded", l ? "true" : "false");
+    fab.parts.btn.setAttribute("aria-label", !l ? "Nouvelle saisie" : l === "root" ? "Fermer" : "Retour");
+    if (l) { var first = fab.bubbles[keys[0]]; if (first) setTimeout(function () { if (fab.level === l) first.btn.focus({ preventScroll: true }); }, 60); }
+  }
+  // Appelé à chaque rendu : visibilité du bouton, pilules des activités en cours
+  function fabSync(visible, canWrite) {
+    if (!fab.el) fabBuild();
+    fab.canWrite = !!canWrite;
+    fab.el.classList.toggle("shown", !!visible);
+    fab.el.classList.toggle("can-write", !!(visible && canWrite));
+    if (!visible || !canWrite) { if (fab.level) fabLevel(null); }
+    else if (fab.level) fabLevel(fab.level);
+    var live = visible ? running().slice(0, 2) : [];
+    var ids = live.map(function (e) { return e.id; });
+    Object.keys(fab.pills).forEach(function (id) {
+      if (ids.indexOf(id) >= 0) return;
+      var el = fab.pills[id]; delete fab.pills[id];
+      el.classList.add("out");
+      setTimeout(function () { el.remove(); }, 260);
+    });
+    live.forEach(function (ev) {
+      var el = pill(ev, canWrite);
+      if (fab.pills[ev.id]) fab.pills[ev.id].replaceWith(el); else el.classList.add("in");
+      fab.pills[ev.id] = el;
+      fab.parts.pills.append(el);
+    });
+    document.documentElement.style.setProperty("--pills-h", (live.length * 72) + "px");
+  }
+  function pill(ev, canWrite) {
+    var acts = h("div", { class: "acts" });
+    if (canWrite) {
+      if (ev.type === "feed.breast" && ev.data.side !== "both") acts.append(h("button", { class: "swap", "aria-label": "Changer de côté", onclick: async function () {
+        var stopped = await stopEvent(ev); if (!stopped) return;
+        await logEvent("feed.breast", { side: ev.data.side === "left" ? "right" : "left" }, { running: true });
+      } }, icon("swap", 18), h("span", { text: "Côté" })));
+      acts.append(h("button", { class: "stop", onclick: function () { stopWithToast(ev); }, text: ev.type === "sleep" ? "Réveil" : "Terminer" }));
+    }
+    return h("div", { class: "pill", "data-id": ev.id },
+      h("span", { class: "breath", "aria-hidden": "true" }),
+      h("div", { class: "txt" }, h("span", { class: "t", text: label(ev) + " · depuis " + hhmm(ev.started_at) }),
+        h("span", { class: "time", "data-start": ev.started_at, text: clock((Date.now() - new Date(ev.started_at)) / 1000) })),
+      acts);
   }
 
   function childSwitcher() {
