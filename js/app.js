@@ -137,6 +137,27 @@
     var months = Math.floor(days / 30.44);
     return months + NB + "mois";
   }
+  var MEMBER_COLORS = ["#1F4A3A", "#5A50A0", "#A8661A", "#8E3829", "#2B6A8A", "#5B655D"];
+  function memberColor(uid) { var i = S.members.findIndex(function (m) { return m.user_id === uid; }); return MEMBER_COLORS[(i < 0 ? 0 : i) % MEMBER_COLORS.length]; }
+  function memberInitials(name) { var w = (name || "?").trim().split(/\s+/); return (w.length > 1 ? w[0][0] + w[1][0] : w[0].slice(0, 2)).toUpperCase() || "?"; }
+  function memberAvatar(m, size) {
+    var on = S.online[m.user_id] && m.user_id !== S.user.id;
+    return h("span", { class: "avatar mav" + (on ? " on" : ""), "data-uid": m.user_id, vars: { background: memberColor(m.user_id), color: "#FFFFFF", width: size, height: size, "font-size": size === "34px" ? "13px" : null }, text: memberInitials(S.profiles[m.user_id]) });
+  }
+  // Présence en direct : qui a Gloups ouvert en ce moment, et état de la synchronisation
+  function paintPresence() {
+    Array.prototype.forEach.call(document.querySelectorAll(".mav[data-uid]"), function (el) {
+      var uid = el.getAttribute("data-uid");
+      el.classList.toggle("on", !!S.online[uid] && S.user && uid !== S.user.id);
+    });
+    Array.prototype.forEach.call(document.querySelectorAll(".sync"), function (el) { el.className = "sync " + S.sync; el.textContent = SYNC_LBL[S.sync]; });
+    Array.prototype.forEach.call(document.querySelectorAll(".mstate[data-uid]"), function (el) {
+      var uid = el.getAttribute("data-uid"), me = S.user && uid === S.user.id;
+      el.textContent = me ? "cet appareil" : S.online[uid] ? "dans l'app" : "";
+    });
+  }
+  var SYNC_LBL = { ok: "Synchronisé", wait: "Connexion…", off: "Hors ligne" };
+  function syncBadge() { return h("span", { class: "sync " + S.sync, role: "status", text: SYNC_LBL[S.sync] }); }
   function initials(name) { return (name || "?").trim().split(/\s+/).map(function (w) { return w[0] || ""; }).join("").slice(0, 2).toUpperCase() || "?"; }
   function uuid() {
     if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -189,7 +210,7 @@
     session: null, user: null, profile: null,
     memberships: [], family: null, role: null,
     children: [], child: null, members: [], profiles: {},
-    events: [], appts: [], evFrom: null, evChild: null, loading: true, channel: null, tick: null,
+    events: [], appts: [], evFrom: null, evChild: null, loading: true, channel: null, tick: null, online: {}, sync: "wait", isAdmin: false,
     deferredInstall: null
   };
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
@@ -262,7 +283,7 @@
     S.profile = r.data || { id: S.user.id, first_name: "" };
   }
   async function loadMemberships() {
-    var r = await sb.from("family_members").select("family_id, role, status, families(id, name, timezone)").eq("user_id", S.user.id).eq("status", "active");
+    var r = await sb.from("family_members").select("family_id, role, status, families(id, name, timezone, settings)").eq("user_id", S.user.id).eq("status", "active");
     if (r.error) throw r.error;
     S.memberships = (r.data || []).filter(function (m) { return m.families; });
     var wanted = lsGet("gloups.family");
@@ -276,9 +297,10 @@
     var fid = S.family.id;
     var res = await Promise.all([
       sb.from("children").select("*").eq("family_id", fid).is("deleted_at", null).order("created_at"),
-      sb.from("family_members").select("user_id, role, status, profiles(first_name)").eq("family_id", fid).eq("status", "active")
+      sb.from("family_members").select("user_id, role, status, profiles!family_members_user_id_fkey(first_name)").eq("family_id", fid).eq("status", "active")
     ]);
     if (res[0].error) throw res[0].error;
+    if (res[1].error) console.warn("membres", res[1].error);
     S.children = res[0].data || [];
     S.members = res[1].data || [];
     S.profiles = {};
@@ -303,9 +325,22 @@
   function subscribe() {
     if (S.channel) { sb.removeChannel(S.channel); S.channel = null; }
     if (!S.family) return;
-    S.channel = sb.channel("events-" + S.family.id)
-      .on("postgres_changes", { event: "*", schema: "public", table: "events", filter: "family_id=eq." + S.family.id }, function () { refresh(); })
-      .subscribe();
+    S.online = {}; S.sync = navigator.onLine === false ? "off" : "wait";
+    var ch = sb.channel("family-" + S.family.id, { config: { presence: { key: S.user.id } } });
+    S.channel = ch;
+    ch.on("postgres_changes", { event: "*", schema: "public", table: "events", filter: "family_id=eq." + S.family.id }, function () { refresh(); })
+      .on("presence", { event: "sync" }, function () {
+        var st = ch.presenceState(), on = {};
+        Object.keys(st).forEach(function (k) { on[k] = true; });
+        S.online = on; paintPresence();
+      })
+      .subscribe(function (status) {
+        if (S.channel !== ch) return;
+        if (status === "SUBSCRIBED") { S.sync = "ok"; if (document.visibilityState === "visible") ch.track({ at: new Date().toISOString() }); }
+        else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") { S.sync = "off"; S.online = {}; }
+        paintPresence();
+      });
+    paintPresence();
   }
   var refreshing = null;
   function refresh() {
@@ -315,33 +350,66 @@
     }, 250);
   }
 
+  /* ---------- Jumeaux et multiples : noter pour un enfant ou pour tous d'un coup ---------- */
+  function twinMode() { return !!(S.family && S.family.settings && S.family.settings.twins && S.children.length > 1); }
+  function forAll() { return twinMode() && lsGet("gloups.forAll." + S.family.id) === "1"; }
+  function allLabel() { return S.children.length === 2 ? "Les deux" : "Tous"; }
+  function forPicker(onDone) {
+    var seg = h("div", { class: "seg for-seg", role: "group", "aria-label": "Pour quel enfant" });
+    function draw() {
+      var all = forAll();
+      seg.replaceChildren.apply(seg, S.children.map(function (c) {
+        return h("button", { type: "button", "aria-pressed": !all && S.child.id === c.id ? "true" : "false", vars: { "--child": c.color }, onclick: async function () {
+          lsSet("gloups.forAll." + S.family.id, null); track("action", "pour_un");
+          if (S.child.id !== c.id) { S.child = c; weights = null; lsSet("gloups.child", c.id); await loadEvents(); route(); }
+          draw(); if (onDone) onDone();
+        } }, h("span", { class: "dot" }), c.first_name);
+      }).concat([h("button", { type: "button", "aria-pressed": all ? "true" : "false", onclick: function () { lsSet("gloups.forAll." + S.family.id, "1"); track("action", "pour_tous"); draw(); if (onDone) onDone(); }, text: allLabel() })]));
+    }
+    draw();
+    return seg;
+  }
+  function entryPicker() { return twinMode() ? h("div", { class: "field" }, h("span", { text: "Pour" }), forPicker()) : null; }
+
   async function logEvent(type, data, opts) {
     opts = opts || {};
     var now = new Date();
-    var row = {
-      id: uuid(), family_id: S.family.id, child_id: S.child.id, type: type,
-      started_at: (opts.started || now).toISOString(),
-      ended_at: opts.running ? null : (opts.ended || opts.started || now).toISOString(),
-      data: data || {}, source: "app"
-    };
-    var r = await sb.from("events").insert(row).select().single();
+    var kids = forAll() ? S.children.map(function (c) { return c.id; }) : [S.child.id];
+    var group = kids.length > 1 ? uuid() : null;
+    var rows = kids.map(function (cid) {
+      var d = Object.assign({}, data || {});
+      if (group) d.twin_group = group;
+      return {
+        id: uuid(), family_id: S.family.id, child_id: cid, type: type,
+        started_at: (opts.started || now).toISOString(),
+        ended_at: opts.running ? null : (opts.ended || opts.started || now).toISOString(),
+        data: d, source: "app"
+      };
+    });
+    var r = await sb.from("events").insert(rows).select();
     if (r.error) { toast(errMsg(r.error), { error: true }); return null; }
-    S.events.unshift(r.data);
-    S.fresh = { id: r.data.id, cat: CAT[r.data.type], t: Date.now() };
+    track("log", type + (group ? ":tous" : ""));
+    var mine = (r.data || []).find(function (x) { return x.child_id === S.child.id; }) || r.data[0];
+    S.events.unshift(mine);
+    S.fresh = { id: mine.id, cat: CAT[mine.type], t: Date.now() };
     closeSheet();
     route();
-    toast(label(r.data) + (opts.running ? " · minuteur lancé" : " · " + hhmm(r.data.started_at)), {
-      action: { label: "Annuler", fn: function () { removeEvent(r.data, true); } }
+    toast(label(mine) + (group ? " · " + allLabel().toLowerCase() : "") + (opts.running ? " · minuteur lancé" : " · " + hhmm(mine.started_at)), {
+      action: { label: "Annuler", fn: function () { removeEvent(mine, true, true); } }
     });
-    return r.data;
+    return mine;
   }
   async function stopEvent(ev) {
-    var r = await sb.from("events").update({ ended_at: new Date().toISOString() }).eq("id", ev.id).select().single();
+    var at = new Date().toISOString();
+    var r = await sb.from("events").update({ ended_at: at }).eq("id", ev.id).select().single();
     if (r.error) { toast(errMsg(r.error), { error: true }); return null; }
+    // Minuteur lancé pour les deux : on l'arrête aussi pour l'autre enfant
+    if (ev.data && ev.data.twin_group) await sb.from("events").update({ ended_at: at }).eq("family_id", S.family.id).eq("data->>twin_group", ev.data.twin_group).is("ended_at", null);
     replaceEvent(r.data); route();
     return r.data;
   }
-  async function removeEvent(ev, silent) {
+  async function removeEvent(ev, silent, wholeGroup) {
+    if (wholeGroup && ev.data && ev.data.twin_group) await sb.from("events").update({ deleted_at: new Date().toISOString() }).eq("family_id", S.family.id).eq("data->>twin_group", ev.data.twin_group).neq("id", ev.id);
     var r = await sb.from("events").update({ deleted_at: new Date().toISOString() }).eq("id", ev.id);
     if (r.error) { toast(errMsg(r.error), { error: true }); return; }
     S.events = S.events.filter(function (x) { return x.id !== ev.id; });
@@ -437,6 +505,13 @@
     if (tab === "create") body.append(familyForm(async function (vals) {
       var r = await sb.rpc("api_v1_create_family", { p_family_name: vals.family, p_child_first_name: vals.child, p_child_birth_date: vals.born ? vals.date : null, p_child_due_date: vals.born ? null : vals.date, p_child_color: vals.color });
       if (r.error) { toast(errMsg(r.error), { error: true }); return; }
+      if (vals.more && vals.more.length) {
+        var others = CHILD_COLORS.map(function (c) { return c[0]; }).filter(function (c) { return c !== vals.color; });
+        var add = await sb.from("children").insert(vals.more.map(function (n, i) { return { family_id: r.data, first_name: n, birth_date: vals.born ? vals.date : null, due_date: vals.born ? null : vals.date, color: others[i % others.length] }; }));
+        if (add.error) toast(errMsg(add.error), { error: true });
+        await sb.from("families").update({ settings: { twins: true } }).eq("id", r.data);
+        track("action", "inscription_multiples_" + (vals.more.length + 1));
+      }
       lsSet("gloups.family", r.data);
       await boot(true);
       if (!isStandalone()) location.hash = "#/installer";
@@ -447,7 +522,17 @@
   var CHILD_COLORS = [["#2B7262", "Vert"], ["#5A50A0", "Lavande"], ["#A8661A", "Ocre"], ["#2E5D94", "Bleu"], ["#B04A3A", "Corail"]];
   function familyForm(onSubmit, opts) {
     opts = opts || {};
-    var born = true, color = CHILD_COLORS[0][0];
+    var born = true, color = CHILD_COLORS[0][0], mult = 1;
+    var extras = [h("input", { class: "input", maxlength: 40, placeholder: "Prénom du 2e", autocomplete: "off" }), h("input", { class: "input", maxlength: 40, placeholder: "Prénom du 3e", autocomplete: "off" })];
+    var extraBox = h("div", { class: "stack" });
+    var multSeg = h("div", { class: "seg", role: "group", "aria-label": "Nombre d'enfants" });
+    function drawMult() {
+      multSeg.replaceChildren.apply(multSeg, [[1, "Un bébé"], [2, "Jumeaux"], [3, "Triplés"]].map(function (o) {
+        return h("button", { type: "button", "aria-pressed": mult === o[0] ? "true" : "false", onclick: function () { mult = o[0]; drawMult(); }, text: o[1] });
+      }));
+      extraBox.replaceChildren.apply(extraBox, extras.slice(0, mult - 1).map(function (inp, i) { return h("label", { class: "field" }, h("span", { text: "Prénom du " + (i + 2) + "e enfant" }), inp); }));
+      child.placeholder = mult > 1 ? "Prénom du 1er" : "Prénom";
+    }
     var fam = h("input", { class: "input", required: true, maxlength: 60, placeholder: "Famille Dupont", autocomplete: "off" });
     var child = h("input", { class: "input", required: true, maxlength: 40, placeholder: "Prénom", autocomplete: "off" });
     var date = h("input", { class: "input", type: "date", required: true, max: new Date().toISOString().slice(0, 10) });
@@ -459,6 +544,7 @@
         h("button", { type: "button", "aria-pressed": born ? "false" : "true", onclick: function () { born = false; date.removeAttribute("max"); dateLbl.textContent = "Date prévue"; drawBorn(); }, text: "Pas encore né(e)" }));
     }
     drawBorn();
+    if (!opts.childOnly) drawMult();
     var colors = h("div", { class: "colors" });
     function drawColors() {
       colors.replaceChildren.apply(colors, CHILD_COLORS.map(function (c) {
@@ -469,16 +555,19 @@
     var submit = h("button", { class: "btn primary full", type: "submit", text: opts.childOnly ? "Ajouter l'enfant" : "Créer la famille" });
     var form = h("form", { class: "stack", onsubmit: async function (e) {
       e.preventDefault();
-      if (!child.value.trim() || !date.value || (!opts.childOnly && !fam.value.trim())) { toast("Complétez les champs.", { error: true }); return; }
+      var more = opts.childOnly ? [] : extras.slice(0, mult - 1).map(function (x) { return x.value.trim(); });
+      if (!child.value.trim() || !date.value || (!opts.childOnly && !fam.value.trim()) || more.some(function (x) { return !x; })) { toast("Complétez les champs.", { error: true }); return; }
       submit.disabled = true;
-      await onSubmit({ family: fam.value.trim(), child: child.value.trim(), born: born, date: date.value, color: color });
+      await onSubmit({ family: fam.value.trim(), child: child.value.trim(), born: born, date: date.value, color: color, more: more });
       submit.disabled = false;
     } },
       opts.childOnly ? null : h("label", { class: "field" }, h("span", { text: "Nom de la famille" }), fam),
-      h("label", { class: "field" }, h("span", { text: "Prénom de l'enfant" }), child),
+      opts.childOnly ? null : h("div", { class: "field" }, h("span", { text: "Combien d'enfants arrivent ?" }), multSeg),
+      h("label", { class: "field" }, h("span", { text: opts.childOnly ? "Prénom de l'enfant" : "Prénom" }), child),
+      extraBox,
       bornSeg,
       h("label", { class: "field" }, dateLbl, date),
-      h("div", { class: "field" }, h("span", { text: "Couleur de l'enfant" }), colors),
+      h("div", { class: "field" }, h("span", { text: opts.childOnly ? "Couleur de l'enfant" : "Couleur (en cas de jumeaux, les autres en reçoivent une différente)" }), colors),
       submit);
     return form;
   }
@@ -539,7 +628,9 @@
     };
 
     var recent = S.events.filter(function (e) { return new Date(e.started_at).getTime() >= today - 86400000; }).slice(0, 12);
-    var membersInit = S.members.slice(0, 3).map(function (m) { return h("span", { class: "avatar", vars: { width: "32px", height: "32px", "font-size": "12px", "margin-left": "-6px", border: "2px solid var(--bg)" }, text: initials(S.profiles[m.user_id]) }); });
+    var mems = S.members.slice().sort(function (a, b) { return (b.user_id === S.user.id) - (a.user_id === S.user.id); });
+    var membersInit = mems.slice(0, 3).map(function (m) { return memberAvatar(m, "34px"); });
+    if (mems.length > 3) membersInit.push(h("span", { class: "avatar mav more", text: "+" + (mems.length - 3) }));
 
     mount(h("main", { class: "screen" },
       h("div", { class: "top" },
@@ -548,7 +639,9 @@
           h("button", { class: "child-btn", vars: { "--child": c.color }, onclick: S.children.length > 1 ? childSwitcher : null, "aria-label": S.children.length > 1 ? "Changer d'enfant" : null },
             h("span", { class: "dot" }), h("span", { class: "name", text: c.first_name }), S.children.length > 1 ? h("span", { class: "muted", vars: { "font-size": "20px" }, text: "▾" }) : null),
           h("span", { class: "small muted", text: ageLabel(c) })),
-        h("a", { href: "#/famille", class: "row", "aria-label": "Famille et réglages", vars: { "text-decoration": "none", gap: "0" } }, membersInit)),
+        h("div", { class: "who-side" },
+          h("a", { href: "#/famille", class: "mstack", "aria-label": "Membres de la famille" }, membersInit),
+          syncBadge())),
       !sleeping ? napCard(canWrite) : null,
       nextApptCard(),
       h("section", { class: "stack", vars: { gap: "8px" } },
@@ -680,6 +773,7 @@
   function fabAction(id) {
     var go = function (l) { fabLevel(l); };
     var then = function (fn) { fabLevel(null); fn(); };
+    track("fab", id);
     switch (id) {
       case "repas": case "couche": case "plus": go(id); return;
       case "sommeil": then(function () { var c = runningOf("sleep"); if (c) stopWithToast(c); else logEvent("sleep", {}, { running: true }); }); return;
@@ -712,8 +806,9 @@
     });
     var btn = h("button", { class: "fab", "aria-label": "Nouvelle saisie", "aria-expanded": "false", onclick: function () { fabLevel(fab.level === "root" ? null : "root"); } }, h("span", { class: "rot" }, icon("plus", 30)));
     var pills = h("div", { class: "pills", role: "group", "aria-label": "Activités en cours" });
-    fab.el = h("div", { class: "fab-root" }, pills, bd, q, layer, btn);
-    fab.parts = { bd: bd, q: q, btn: btn, pills: pills };
+    var who = h("div", { class: "fab-who" });
+    fab.el = h("div", { class: "fab-root" }, pills, bd, who, q, layer, btn);
+    fab.parts = { bd: bd, q: q, btn: btn, pills: pills, who: who };
     document.body.append(fab.el);
   }
   function fabLevel(l) {
@@ -736,6 +831,8 @@
       b.btn.setAttribute("aria-hidden", on ? "false" : "true");
     });
     fab.parts.q.textContent = l ? QUESTION[l] : "";
+    if (l && twinMode()) fab.parts.who.replaceChildren(forPicker(function () { if (fab.level) fabLevel(fab.level); })); else if (!l) fab.parts.who.replaceChildren();
+    fab.el.classList.toggle("has-who", !!l && twinMode());
     fab.el.classList.toggle("open", !!l);
     document.documentElement.classList.toggle("fab-open", !!l);
     fab.parts.btn.setAttribute("aria-expanded", l ? "true" : "false");
@@ -817,7 +914,7 @@
   }
 
   function sheetFeed() {
-    openSheet("Repas", h("div", { class: "stack" },
+    openSheet("Repas", h("div", { class: "stack" }, entryPicker(),
       h("div", { class: "big3" },
         h("button", { class: "bigbtn repas", onclick: function () { closeSheet(); dockBreast("left"); }, text: "Sein gauche" }),
         h("button", { class: "bigbtn repas", onclick: function () { closeSheet(); dockBreast("right"); }, text: "Sein droit" }),
@@ -841,7 +938,7 @@
     function drawDur() { durChips.replaceChildren.apply(durChips, [5, 10, 15, 20, 30, 45].map(function (m) { return h("button", { type: "button", class: "chip", "aria-pressed": mins === m ? "true" : "false", onclick: function () { mins = m; drawDur(); }, text: m + NB + "min" }); })); }
     drawDur();
     var t = timeChooser();
-    openSheet("Tétée passée", h("div", { class: "stack" }, sideSeg, h("div", { class: "field" }, h("span", { text: "Durée" }), durChips), t.el,
+    openSheet("Tétée passée", h("div", { class: "stack" }, entryPicker(), sideSeg, h("div", { class: "field" }, h("span", { text: "Durée" }), durChips), t.el,
       h("button", { class: "btn primary full", onclick: function () { var st = t.value(); logEvent("feed.breast", { side: side }, { started: st, ended: new Date(st.getTime() + mins * 60000) }); }, text: "Enregistrer" })));
   }
   function sheetBottle() {
@@ -851,14 +948,14 @@
     draw();
     var milk = selectField("Lait", { breastmilk: "Lait maternel", formula: "Lait infantile", other: "Autre" });
     var t = timeChooser();
-    openSheet("Biberon", h("div", { class: "stack" }, h("div", { class: "field" }, h("span", { text: "Quantité" }), chips), milk.el, t.el,
+    openSheet("Biberon", h("div", { class: "stack" }, entryPicker(), h("div", { class: "field" }, h("span", { text: "Quantité" }), chips), milk.el, t.el,
       h("button", { class: "btn primary full", onclick: function () { var d = { ml: ml }; if (milk.value()) d.milk = milk.value(); logEvent("feed.bottle", d, { started: t.value() }); }, text: "Enregistrer le biberon" })));
   }
   function sheetPump() {
     var ml = selectField("Quantité", { 20: "20 ml", 40: "40 ml", 60: "60 ml", 80: "80 ml", 100: "100 ml", 120: "120 ml", 150: "150 ml" });
     var side = selectField("Côté", { left: "Gauche", right: "Droit", both: "Les deux" });
     var t = timeChooser();
-    openSheet("Tire-lait", h("div", { class: "stack" }, ml.el, side.el, t.el,
+    openSheet("Tire-lait", h("div", { class: "stack" }, entryPicker(), ml.el, side.el, t.el,
       h("button", { class: "btn primary full", onclick: function () { var d = {}; if (ml.value()) d.ml = parseInt(ml.value(), 10); if (side.value()) d.side = side.value(); logEvent("feed.pump", d, { started: t.value() }); }, text: "Enregistrer" })));
   }
   function sheetDiaper() {
@@ -873,7 +970,7 @@
       if (poo && texture.value()) d.texture = texture.value();
       logEvent("diaper", d, { started: t.value() });
     }; };
-    openSheet("Couche", h("div", { class: "stack" },
+    openSheet("Couche", h("div", { class: "stack" }, entryPicker(),
       h("div", { class: "big3" },
         h("button", { class: "bigbtn couche", onclick: save(true, false), text: "Pipi" }),
         h("button", { class: "bigbtn couche", onclick: save(false, true), text: "Selles" }),
@@ -890,7 +987,7 @@
     }
     var start = h("input", { class: "input", type: "time", value: hhmm(new Date(Date.now() - 3600000)) });
     var end = h("input", { class: "input", type: "time", value: hhmm(new Date()) });
-    openSheet("Sommeil", h("div", { class: "stack" },
+    openSheet("Sommeil", h("div", { class: "stack" }, entryPicker(),
       place.el,
       h("button", { class: "bigbtn sommeil", onclick: function () { var d = {}; if (place.value()) d.place = place.value(); logEvent("sleep", d, { running: true }); }, text: "Il s'endort maintenant" }),
       h("div", { class: "card" }, h("b", { text: "Ou noter un sommeil passé" }),
@@ -905,7 +1002,7 @@
   function timeToday(v) { var p = v.split(":"), d = new Date(); d.setHours(+p[0], +p[1], 0, 0); if (d > new Date()) d = new Date(d.getTime() - 86400000); return d; }
 
   function sheetPlus() {
-    openSheet("Plus", h("div", { class: "stack" },
+    openSheet("Plus", h("div", { class: "stack" }, entryPicker(),
       h("div", { class: "big3" },
         h("button", { class: "bigbtn pleurs", onclick: function () { logEvent("cry", {}, { running: true }); }, text: "Pleurs" }),
         h("button", { class: "bigbtn couche", onclick: function () { logEvent("bath", {}, {}); }, text: "Bain" }),
@@ -917,7 +1014,7 @@
   }
   function sheetNote() {
     var ta = h("textarea", { class: "input", maxlength: 500, placeholder: "Ce qui s'est passé, une question pour le pédiatre..." });
-    openSheet("Note", h("div", { class: "stack" }, ta, h("button", { class: "btn primary full", onclick: function () { if (ta.value.trim()) logEvent("note", { text: ta.value.trim() }); }, text: "Enregistrer la note" })));
+    openSheet("Note", h("div", { class: "stack" }, entryPicker(), ta, h("button", { class: "btn primary full", onclick: function () { if (ta.value.trim()) logEvent("note", { text: ta.value.trim() }); }, text: "Enregistrer la note" })));
   }
   async function saveMeasure(kind, value, method) {
     var row = { family_id: S.family.id, child_id: S.child.id, kind: kind, value: value, measured_at: new Date().toISOString() };
@@ -1608,11 +1705,19 @@
       })) : null,
       h("section", { class: "card" }, h("b", { class: "title-m", text: "Enfants" }),
         S.children.map(function (c) { return h("div", { class: "member" }, h("span", { class: "avatar", vars: { background: c.color }, text: initials(c.first_name) }), h("span", { class: "grow" }, h("b", { text: c.first_name }), h("br"), h("span", { class: "small muted", text: ageLabel(c) }))); }),
+        isParent && S.children.length > 1 ? switchBtn(twinMode(), S.children.length === 2 ? "Mode jumeaux" : "Mode multiples", "Choisir à chaque saisie : un enfant ou " + allLabel().toLowerCase() + " d'un coup", async function (v) {
+          var st = Object.assign({}, S.family.settings || {}, { twins: v });
+          var u = await sb.from("families").update({ settings: st }).eq("id", S.family.id);
+          if (u.error) { toast(errMsg(u.error), { error: true }); return; }
+          S.family.settings = st; track("action", v ? "jumeaux_on" : "jumeaux_off");
+        }) : null,
         isParent ? h("button", { class: "btn full", onclick: function () { openSheet("Ajouter un enfant", familyForm(addChild, { childOnly: true })); }, text: "Ajouter un enfant" }) : null),
       h("section", { class: "card" }, h("b", { class: "title-m", text: "Membres" }),
-        S.members.map(function (m) { return h("div", { class: "member" }, h("span", { class: "avatar", text: initials(S.profiles[m.user_id]) }), h("span", { class: "grow", text: S.profiles[m.user_id] + (m.user_id === S.user.id ? " (vous)" : "") }), h("span", { class: "role", text: roleLbl[m.role] })); })),
+        S.members.map(function (m) { var me = m.user_id === S.user.id; return h("div", { class: "member" }, memberAvatar(m), h("span", { class: "grow" }, h("span", { text: S.profiles[m.user_id] + (me ? " (vous)" : "") }), h("br"), h("span", { class: "small muted mstate", "data-uid": m.user_id, text: me ? "cet appareil" : S.online[m.user_id] ? "dans l'app" : "" })), h("span", { class: "role", text: roleLbl[m.role] })); }),
+        S.members.length < 2 ? h("span", { class: "small muted", text: "Vous êtes seul pour l'instant. Invitez l'autre parent ci-dessous : son avatar apparaîtra en haut de l'écran Aujourd'hui, avec un point vert quand il a Gloups ouvert." }) : null),
       isParent ? h("section", { class: "card green" }, h("b", { class: "title-m", text: "Inviter quelqu'un" }), invite) : null,
       agendaSection(),
+      S.isAdmin ? h("a", { href: "#/admin", class: "card", vars: { "text-decoration": "none", color: "inherit" } }, h("b", { class: "title-m", text: "Tableau de bord" }), h("span", { class: "small muted", text: "Chiffres globaux de Gloups, sans accès aux données des familles." })) : null,
       h("section", { class: "card" }, h("b", { class: "title-m", text: "Cet appareil" }),
         h("a", { href: "#/installer", class: "btn full", text: isStandalone() ? "App installée ✓" : "Installer sur l'écran d'accueil" }),
         h("button", { class: "btn full", onclick: signOut, text: "Se déconnecter" }),
@@ -1633,6 +1738,113 @@
     if (/Android/.test(ua)) return "android";
     return "desktop";
   }
+  // Ouverture de l'app : sert uniquement au comptage global (une fois par ouverture, au plus toutes les 30 min)
+  var lastPing = 0;
+  function ping() {
+    lastPing = Date.now();
+    var ua = navigator.userAgent, plat = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1) ? "ios" : /Android/.test(ua) ? "android" : "ordinateur";
+    sb.rpc("api_v1_ping", { p_platform: plat, p_standalone: isStandalone(), p_version: (window.GLOUPS_CONFIG && GLOUPS_CONFIG.version) || "" }).then(function () {}, function () {});
+  }
+  // Compteurs d'usage anonymes (écrans vus, boutons utilisés) : aucun identifiant, aucun contenu
+  var USE = {};
+  function track(kind, name) { var k = kind + ":" + name; USE[k] = (USE[k] || 0) + 1; }
+  function flushUsage() {
+    var keys = Object.keys(USE); if (!keys.length || !S.user) return;
+    var batch = USE; USE = {};
+    sb.rpc("api_v1_track", { p_counts: batch }).then(function (r) { if (r.error) Object.keys(batch).forEach(function (k) { USE[k] = (USE[k] || 0) + batch[k]; }); }, function () {});
+  }
+  setInterval(flushUsage, 60000);
+
+  /* ---------- Écran : tableau de bord administrateur (chiffres agrégés) ---------- */
+  var ADM = { data: null, at: 0, loading: false, err: null };
+  var TYPE_NAME = { "feed.breast": "Tétées", "feed.bottle": "Biberons", "feed.pump": "Tire-lait", sleep: "Sommeils", diaper: "Couches", cry: "Pleurs", bath: "Bains", note: "Notes" };
+  async function loadAdmin() {
+    ADM.loading = true; ADM.err = null;
+    var r = await sb.rpc("api_admin_stats");
+    ADM.loading = false;
+    if (r.error) ADM.err = errMsg(r.error); else { ADM.data = r.data; ADM.at = Date.now(); }
+    if (location.hash === "#/admin") screenAdmin();
+  }
+  function screenAdmin() {
+    if (!ADM.data && !ADM.loading && !ADM.err || Date.now() - ADM.at > 60000 && !ADM.loading) loadAdmin();
+    var d = ADM.data, n = function (x) { return (x || 0).toLocaleString("fr-FR"); };
+    var kpi = function (v, l, sub) { return h("div", { class: "kpi" }, h("b", { text: v }), h("span", { text: l }), sub ? h("span", { class: "sub", text: sub }) : null); };
+    var body;
+    if (!d) body = h("section", { class: "card" }, h("span", { class: "muted", text: ADM.err || "Chargement…" }));
+    else {
+      var roles = d.members_by_role || {}, daily = d.daily || [];
+      var spark = function (key, color, title) {
+        var max = Math.max(1, Math.max.apply(null, daily.map(function (x) { return x[key]; })));
+        return h("section", { class: "card" },
+          h("div", { class: "row between" }, h("b", { text: title }), h("span", { class: "small muted", text: "30 jours" })),
+          h("div", { class: "spark", role: "img", "aria-label": title + " sur 30 jours" }, daily.map(function (x) {
+            return h("span", { title: x.day + " : " + x[key], vars: { height: Math.max(2, x[key] / max * 100) + "%", background: x[key] ? color : "var(--line)" } });
+          })),
+          h("div", { class: "row between small muted" }, h("span", { text: "il y a 30 j" }), h("span", { text: "max " + max }), h("span", { text: "auj." })));
+      };
+      var hbars = function (obj, names, color) {
+        var ks = Object.keys(obj || {}).sort(function (x, y) { return obj[y] - obj[x]; });
+        if (!ks.length) return h("span", { class: "small muted", text: "Pas encore de données." });
+        var mx = obj[ks[0]] || 1;
+        return ks.map(function (k) {
+          return h("div", { class: "hbar" }, h("span", { class: "l", text: (names && names[k]) || k.replace(/_/g, " ") }),
+            h("span", { class: "t" }, h("span", { vars: { width: (obj[k] / mx * 100) + "%", background: typeof color === "function" ? color(k) : color } })), h("b", { text: n(obj[k]) }));
+        });
+      };
+      var card = function (title, sub) { return h("section", { class: "card" }, h("div", { class: "row between" }, h("b", { text: title }), sub ? h("span", { class: "small muted", text: sub }) : null), Array.prototype.slice.call(arguments, 2)); };
+      var pc = d.per_child_day_7d || {}, ret = d.retention_7d || {}, ev = d.events || {}, use = d.usage_30d || {}, inv = d.invitations_30d || {}, hl = d.health_30d || {};
+      var AGE = { a_naitre: "à naître", m0_1: "0-1 mois", m1_3: "1-3 mois", m3_6: "3-6 mois", m6_12: "6-12 mois", plus_1an: "1 an et +" };
+      var SCREEN = { accueil: "Aujourd'hui", journal_jour: "Journal jour", journal_semaine: "Journal semaine", journal_mois: "Journal mois", tendances: "Tendances", famille: "Famille", installer: "Installation", admin: "Tableau de bord" };
+      var FAB = { repas: "Repas", sommeil: "Sommeil", couche: "Couche", pleurs: "Pleurs", plus: "Plus", g: "Sein gauche", d: "Sein droit", biberon: "Biberon", tirelait: "Tire-lait", pipi: "Pipi", selles: "Selles", deux: "Pipi + selles", bain: "Bain", temp: "Température", poids: "Poids", note: "Note" };
+      var fbc = {}; Object.keys(d.families_by_children || {}).forEach(function (k) { fbc[k] = d.families_by_children[k]; });
+      body = [
+        card("Inscrits", null, h("div", { class: "kpis" },
+            kpi(n(d.families), d.families > 1 ? "familles" : "famille", n(d.families_multi_parent) + " à deux parents"),
+            kpi(n(d.children), d.children > 1 ? "enfants" : "enfant", n(d.children_unborn) + " à naître"),
+            kpi(n(d.users), d.users > 1 ? "comptes" : "compte", n(roles.parent) + " parents, " + n((roles.proche || 0) + (roles.lecture || 0)) + " proches"))),
+        card("Utilisation", null, h("div", { class: "kpis" },
+            kpi(n(d.active.d1), "actifs auj.", n(d.opens.d1) + " ouvertures"),
+            kpi(n(d.active.d7), "actifs 7 j", n(d.opens.d7) + " ouvertures"),
+            kpi(n(d.active.d30), "actifs 30 j", n(d.opens.d30) + " ouvertures")),
+          h("div", { class: "kpis" },
+            kpi(ret.prev ? Math.round(ret.kept / ret.prev * 100) + " %" : "-", "reviennent", "d'une semaine à l'autre"),
+            kpi(n(d.installed), "installées", "sur l'écran d'accueil"),
+            kpi(n(ev.d1), "saisies auj.", n(ev.d7) + " sur 7 j"))),
+        spark("active", "#1F4A3A", "Personnes actives par jour"),
+        spark("opens", "#2B6A8A", "Ouvertures de l'app par jour"),
+        spark("events", "#A8661A", "Saisies par jour"),
+        spark("new_users", "#5A50A0", "Nouveaux comptes par jour"),
+        card("Rythme moyen d'un enfant", "par jour, 7 derniers jours", h("div", { class: "kpis" },
+            kpi(pc.feeds != null ? dec(pc.feeds) : "-", "repas"),
+            kpi(pc.diapers != null ? dec(pc.diapers) : "-", "couches"),
+            kpi(pc.sleep_h != null ? dec(pc.sleep_h) + " h" : "-", "de sommeil noté")),
+          h("span", { class: "small muted", text: "Moyenne sur " + n(pc.children) + " enfant(s) ayant au moins une saisie." })),
+        card("Saisies par type", "30 jours · " + n(ev.total) + " au total", hbars(d.events_by_type_30d, TYPE_NAME, function (t) { return CAT_COLOR[CAT[t]] || "#5B655D"; }),
+          h("span", { class: "small muted", text: n(ev.twin_30d) + " notées pour plusieurs enfants d'un coup, " + n(ev.by_shortcut_30d) + " par raccourci, " + n(ev.deleted_30d) + " supprimées." })),
+        card("Familles", null, h("span", { class: "small muted", text: "Nombre d'enfants par famille" }), hbars(fbc, { "1": "1 enfant", "2": "2 enfants", "3": "3 enfants" }, "#2B7262"),
+          h("span", { class: "small muted", text: n(d.families_twins_mode) + " en mode jumeaux ou multiples." }),
+          h("span", { class: "small muted", text: "Âge des enfants" }), hbars(d.children_age, AGE, "#A8661A")),
+        card("Écrans consultés", "30 jours", hbars(use.screen, SCREEN, "#1F4A3A")),
+        card("Bouton +", "30 jours", hbars(use.fab, FAB, "#A8661A")),
+        card("Actions", "30 jours", hbars(use.action, null, "#5A50A0")),
+        card("Appareils", "30 derniers jours", hbars(d.platforms, { ios: "iPhone", android: "Android", ordinateur: "Ordinateur" }, "#2B6A8A"),
+          h("span", { class: "small muted", text: "Versions utilisées" }), hbars(d.versions, null, "#5B655D")),
+        card("Autres", null, h("div", { class: "kpis" },
+            kpi(n(inv.created), "invitations", n(inv.used) + " utilisées, 30 j"),
+            kpi(n(hl.appointments_upcoming), "rendez-vous", "à venir"),
+            kpi(n(d.calendar_feeds), "agendas", "synchronisés")),
+          h("div", { class: "kpis" }, kpi(n(hl.measurements), "mesures", "poids, temp., 30 j"))),
+        h("p", { class: "small muted", text: "Uniquement des comptes agrégés : aucun prénom, aucune saisie, aucune donnée de santé n'est lisible ici. Mis à jour " + new Date(d.generated_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) + "." })
+      ];
+    }
+    mount(h("main", { class: "screen" },
+      h("a", { href: "#/famille", class: "small", text: "‹ Famille" }),
+      h("span", { class: "eyebrow", text: "Administration" }),
+      h("div", { class: "row between" }, h("h1", { class: "title-l", text: "Tableau de bord" }), h("button", { class: "btn ghost", onclick: function () { ADM.at = 0; loadAdmin(); }, text: "Actualiser" })),
+      body));
+    appEl.append(dock("famille", S.role === "parent" || S.role === "proche"));
+  }
+
   function screenInstall(choice) {
     var b = choice || detectBrowser();
     var names = { safari: "iPhone · Safari", chrome: "iPhone · Chrome", other: "iPhone · autre navigateur", android: "Android", desktop: "Ordinateur" };
@@ -1683,11 +1895,13 @@
     ENTER = key !== lastKey && !SW.nav;
     SW.nav = false;
     var prevIdx = TAB_IDX[lastKey ? lastKey.split("/")[1] : null];
+    if (key !== lastKey) track("screen", r === "journal" && J.view ? "journal_" + J.view : r || "accueil");
     lastKey = key;
     if (r === "journal") screenJournal();
     else if (r === "tendances") screenTrends();
     else if (r === "famille") screenFamily();
     else if (r === "installer") screenInstall();
+    else if (r === "admin" && S.isAdmin) screenAdmin();
     else screenHome();
     if (ENTER) { if (trendsEnter) trendsPrev = prevIdx; else afterEnter(r, prevIdx); }
     ENTER = false;
@@ -1855,6 +2069,8 @@
         await loadEvents();
         await loadAppts();
         subscribe();
+        ping();
+        sb.rpc("api_admin_is_admin").then(function (r) { var was = S.isAdmin; S.isAdmin = !r.error && r.data === true; if (S.isAdmin !== was && location.hash === "#/famille") route(); });
       }
     } catch (e) {
       S.loading = false;
@@ -1889,7 +2105,14 @@
   }, 1000);
   // Les durées « depuis » se rafraîchissent chaque minute
   setInterval(function () { if (!sheetRoot.firstChild && !SW.active && (location.hash === "" || location.hash === "#/")) route(); }, 60000);
-  document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible" && S.user) refresh(); });
+  document.addEventListener("visibilitychange", function () {
+    var vis = document.visibilityState === "visible";
+    if (!vis) flushUsage();
+    if (S.channel && S.sync === "ok") { try { vis ? S.channel.track({ at: new Date().toISOString() }) : S.channel.untrack(); } catch (e) { /* rien */ } }
+    if (vis && S.user) { if (S.sync === "off" && S.family) subscribe(); refresh(); if (Date.now() - lastPing > 30 * 60000) ping(); }
+  });
+  window.addEventListener("offline", function () { S.sync = "off"; S.online = {}; paintPresence(); });
+  window.addEventListener("online", function () { if (S.user && S.family) { subscribe(); refresh(); } });
 
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(function () {});
 
