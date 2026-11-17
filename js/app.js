@@ -199,7 +199,8 @@
   var appEl = document.getElementById("app");
   var sheetRoot = document.getElementById("sheet-root");
   var toastRoot = document.getElementById("toast-root");
-  function mount(node) { if (fab.el) fabSync(false); appEl.replaceChildren(node); window.scrollTo(0, 0); }
+  var PEEK = false; // vrai pendant le rendu de l'écran voisin, affiché sous le doigt
+  function mount(node) { if (PEEK) { appEl.replaceChildren(node); return; } if (fab.el) fabSync(false); appEl.replaceChildren(node); window.scrollTo(0, 0); }
 
   var toastTimer = null;
   function toast(msg, opts) {
@@ -216,7 +217,7 @@
     if (!bd) return;
     if (bd.classList.contains("closing")) return;
     bd.classList.add("closing");
-    setTimeout(function () { if (bd.parentNode === sheetRoot) sheetRoot.removeChild(bd); }, 240);
+    setTimeout(function () { if (bd.parentNode === sheetRoot) sheetRoot.removeChild(bd); if (!sheetRoot.firstChild) document.documentElement.classList.remove("sheet-open"); }, 240);
   }
   function openSheet(title, body) {
     var sheet = h("div", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": title },
@@ -225,6 +226,7 @@
       body);
     var bd = h("div", { class: "backdrop", onclick: function (e) { if (e.target === bd) closeSheet(); } }, sheet);
     sheetRoot.replaceChildren(bd);
+    document.documentElement.classList.add("sheet-open");
     // Tirer la feuille vers le bas pour la fermer
     var y0 = null, dy = 0, t0 = 0;
     sheet.addEventListener("touchstart", function (e) {
@@ -625,13 +627,13 @@
     var tab = function (href, ic, txt, key) {
       return h("a", { href: href, "aria-current": active === key ? "page" : null, "data-tab": key }, icon(ic, 22), h("span", { text: txt }));
     };
-    fabSync(true, canWrite);
+    if (!PEEK) fabSync(true, canWrite);
     var ind = h("span", { class: "tab-ind", "aria-hidden": "true" });
     var nav = h("nav", { class: "dock" + (canWrite ? " has-fab" : ""), "aria-label": "Navigation principale" },
       tab("#/", "home", "Aujourd'hui", "home"), tab("#/journal", "list", "Journal", "journal"),
       canWrite ? h("span", { class: "fab-gap", "aria-hidden": "true" }) : null,
       tab("#/tendances", "chart", "Tendances", "tendances"), tab("#/famille", "family", "Famille", "famille"), ind);
-    requestAnimationFrame(function () {
+    if (!PEEK) requestAnimationFrame(function () {
       var a = nav.querySelector('[data-tab="' + active + '"]'); if (!a || !nav.isConnected) return;
       var x = a.offsetLeft + a.offsetWidth / 2 - 10;
       if (tabInd.x != null && tabInd.x !== x) {
@@ -1675,9 +1677,11 @@
       return;
     }
     if (!S.family) { screenOnboarding(); return; }
+    if (SW.active) { SW.pending = true; return; }
     var r = location.hash.replace(/^#\/?/, "");
     var key = (S.child ? S.child.id : "") + "/" + r;
-    ENTER = key !== lastKey;
+    ENTER = key !== lastKey && !SW.nav;
+    SW.nav = false;
     var prevIdx = TAB_IDX[lastKey ? lastKey.split("/")[1] : null];
     lastKey = key;
     if (r === "journal") screenJournal();
@@ -1699,38 +1703,119 @@
   }
   window.addEventListener("hashchange", function () { closeSheet(); route(); });
 
-  // Glisser de droite à gauche (ou l'inverse) pour passer d'un onglet à l'autre
+  // Glisser entre les onglets : l'écran suit le doigt et l'onglet voisin arrive en même temps
   var TABS = ["#/", "#/journal", "#/tendances", "#/famille"];
+  var TAB_KEYS = ["home", "journal", "tendances", "famille"];
+  var SW = { active: false, pending: false, nav: false };
+  function renderPeek(hash) {
+    var saved = Array.prototype.slice.call(appEl.childNodes), m = null;
+    var sv = { ENTER: ENTER, jdir: J.dir };
+    PEEK = true; ENTER = false; J.dir = 0;
+    try {
+      var r = hash.replace(/^#\/?/, "");
+      if (r === "journal") screenJournal(); else if (r === "tendances") screenTrends(); else if (r === "famille") screenFamily(); else screenHome();
+      m = appEl.querySelector("main.screen");
+    } catch (e) { m = null; }
+    PEEK = false; ENTER = sv.ENTER; J.dir = sv.jdir;
+    appEl.replaceChildren.apply(appEl, saved);
+    return m;
+  }
   (function () {
-    var x0 = null, y0 = 0, t0 = 0, lock = null, main = null;
+    var x0 = 0, y0 = 0, lock = null, cur = null, idx = -1, W = 0, scrollY0 = 0;
+    var peeks = {}, layer = null, dx = 0, hist = [], ind = null, xs = [];
     function blocked(el) {
       return sheetRoot.firstChild || (fab.el && fab.level) || !appEl.querySelector(".dock") ||
-        (el.closest && el.closest(".swipe, input, textarea, select, .sheet, .fab-root"));
+        (el.closest && el.closest(".swipe, input, textarea, select, .sheet, .fab-root, .backdrop"));
+    }
+    function curIndex() { var hsh = location.hash === "" || location.hash === "#" ? "#/" : location.hash; return TABS.indexOf(hsh); }
+    function getPeek(j) {
+      if (peeks[j] !== undefined) return peeks[j];
+      var m = renderPeek(TABS[j]);
+      if (!m) { peeks[j] = null; return null; }
+      var box = h("div", { class: "peek", "aria-hidden": "true" }, m);
+      layer.append(box);
+      peeks[j] = box; return box;
+    }
+    function tabX(j) { return xs[j] != null ? xs[j] : null; }
+    function apply(d) {
+      var dir = d < 0 ? 1 : -1, j = idx + dir, has = j >= 0 && j < TABS.length;
+      var shown = has ? d : d * 0.28; // résistance au bord
+      cur.style.transform = "translate3d(" + shown + "px,0,0)";
+      Object.keys(peeks).forEach(function (k) { var p = peeks[k]; if (p) p.style.visibility = (+k === j && has) ? "visible" : "hidden"; });
+      if (has) { var p = getPeek(j); if (p) p.style.transform = "translate3d(" + (shown + (dir > 0 ? W : -W)) + "px,0,0)"; }
+      if (ind && has && tabX(idx) != null && tabX(j) != null) {
+        var t = Math.min(1, Math.abs(shown) / W), x = tabX(idx) + (tabX(j) - tabX(idx)) * t;
+        ind.style.transition = "none"; ind.style.transform = "translateX(" + x + "px) scaleX(" + (1 + Math.sin(t * Math.PI) * 1.2) + ")";
+      }
+    }
+    function cleanup() {
+      if (layer) layer.remove();
+      layer = null; peeks = {}; SW.active = false;
+      if (cur) { cur.style.transition = ""; cur.style.transform = ""; cur.style.willChange = ""; }
+      if (SW.pending) { SW.pending = false; route(); }
     }
     document.addEventListener("touchstart", function (e) {
-      if (e.touches.length !== 1 || blocked(e.target)) { x0 = null; return; }
-      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; t0 = Date.now(); lock = null; main = appEl.querySelector("main.screen");
+      lock = null;
+      if (e.touches.length !== 1 || SW.active || blocked(e.target)) return;
+      idx = curIndex(); cur = appEl.querySelector("main.screen");
+      if (idx < 0 || !cur) return;
+      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; hist = [[Date.now(), x0]];
+      lock = "?";
     }, { passive: true });
     document.addEventListener("touchmove", function (e) {
-      if (x0 == null || e.touches.length !== 1) return;
-      var dx = e.touches[0].clientX - x0, dy = e.touches[0].clientY - y0;
-      if (!lock && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) lock = Math.abs(dx) > Math.abs(dy) * 1.3 ? "h" : "v";
-      if (lock === "h" && main) { main.style.transition = "none"; main.style.transform = "translateX(" + Math.round(dx * 0.25) + "px)"; main.style.opacity = String(1 - Math.min(0.35, Math.abs(dx) / 900)); }
-    }, { passive: true });
-    function end(e) {
-      if (x0 == null) return;
-      var t = e.changedTouches && e.changedTouches[0], dx = t ? t.clientX - x0 : 0;
-      var fast = Date.now() - t0 < 700, wasH = lock === "h";
-      x0 = null;
-      if (main) { main.style.transition = "transform .25s ease, opacity .25s ease"; main.style.transform = ""; main.style.opacity = ""; }
-      if (!wasH || Math.abs(dx) < (fast ? 60 : 110)) return;
-      var cur = location.hash === "" || location.hash === "#" ? "#/" : location.hash;
-      var i = TABS.indexOf(cur); if (i < 0) return;
-      var j = i + (dx < 0 ? 1 : -1);
-      if (j >= 0 && j < TABS.length) { if (main) main.style.transition = "none"; location.hash = TABS[j]; }
+      if (!lock || e.touches.length !== 1) return;
+      var x = e.touches[0].clientX, y = e.touches[0].clientY;
+      if (lock === "?") {
+        var ax = Math.abs(x - x0), ay = Math.abs(y - y0);
+        if (ax < 8 && ay < 8) return;
+        if (ax <= ay * 1.15) { lock = null; return; }
+        lock = "h"; SW.active = true; W = window.innerWidth; scrollY0 = window.scrollY;
+        x0 = x; // pas de saut au démarrage
+        layer = h("div", { class: "peek-layer", "aria-hidden": "true" });
+        document.body.append(layer);
+        cur.style.willChange = "transform"; cur.style.transition = "none";
+        ind = appEl.querySelector(".tab-ind");
+        var nav = appEl.querySelector(".dock");
+        xs = TAB_KEYS.map(function (k) { var a = nav && nav.querySelector('[data-tab="' + k + '"]'); return a ? a.offsetLeft + a.offsetWidth / 2 - 10 : null; });
+      }
+      if (lock !== "h") return;
+      if (e.cancelable) e.preventDefault();
+      dx = x - x0;
+      hist.push([Date.now(), x]); if (hist.length > 6) hist.shift();
+      apply(dx);
+    }, { passive: false });
+    function release() {
+      if (lock !== "h") { lock = null; return; }
+      lock = null;
+      var a = hist[0], b = hist[hist.length - 1], v = b[0] > a[0] ? (b[1] - a[1]) / (b[0] - a[0]) : 0; // px/ms
+      var dir = dx < 0 ? 1 : -1, j = idx + dir, has = j >= 0 && j < TABS.length;
+      var go = has && (Math.abs(dx) > W * 0.3 || (Math.abs(v) > 0.35 && Math.sign(v) === Math.sign(dx)));
+      var target = go ? (dir > 0 ? -W : W) : 0;
+      var remaining = Math.abs(target - (has ? dx : dx * 0.28));
+      var ms = Math.max(160, Math.min(340, Math.abs(v) > 0.1 ? remaining / Math.abs(v) * 1.6 : remaining * 0.9));
+      var ease = "transform " + ms + "ms cubic-bezier(.2,.8,.25,1)";
+      cur.style.transition = ease;
+      cur.style.transform = "translate3d(" + target + "px,0,0)";
+      var p = has ? peeks[j] : null;
+      if (p) { p.style.transition = ease; p.style.transform = "translate3d(" + (target + (dir > 0 ? W : -W)) + "px,0,0)"; }
+      if (ind) {
+        ind.style.transition = "transform " + ms + "ms cubic-bezier(.2,.8,.25,1)";
+        var tx = go ? tabX(j) : tabX(idx);
+        if (tx != null) ind.style.transform = "translateX(" + tx + "px)";
+      }
+      setTimeout(function () {
+        if (go) {
+          tabInd.x = tabX(j);
+          SW.active = false; SW.pending = false; SW.nav = true;
+          // Le vrai écran remplace l'aperçu au même endroit, sans attendre l'événement de navigation
+          try { history.pushState(null, "", TABS[j]); } catch (er) { location.hash = TABS[j]; return; }
+          route();
+          cleanup();
+        } else cleanup();
+      }, ms + 20);
     }
-    document.addEventListener("touchend", end, { passive: true });
-    document.addEventListener("touchcancel", function () { x0 = null; if (main) { main.style.transform = ""; main.style.opacity = ""; } }, { passive: true });
+    document.addEventListener("touchend", release, { passive: true });
+    document.addEventListener("touchcancel", release, { passive: true });
   })();
   // Pas de zoom : pincement (Safari) et double tap
   document.addEventListener("gesturestart", function (e) { e.preventDefault(); });
@@ -1803,7 +1888,7 @@
     document.querySelectorAll("[data-start]").forEach(function (el) { el.textContent = clock((Date.now() - new Date(el.getAttribute("data-start"))) / 1000); });
   }, 1000);
   // Les durées « depuis » se rafraîchissent chaque minute
-  setInterval(function () { if (!sheetRoot.firstChild && (location.hash === "" || location.hash === "#/")) route(); }, 60000);
+  setInterval(function () { if (!sheetRoot.firstChild && !SW.active && (location.hash === "" || location.hash === "#/")) route(); }, 60000);
   document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible" && S.user) refresh(); });
 
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(function () {});
