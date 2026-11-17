@@ -1478,19 +1478,6 @@
     var body = view.body;
     body.classList.add("jbody");
     if (dayDir) body.classList.add(dayDir > 0 ? "enter-r" : "enter-l");
-    // Glisser à gauche ou à droite pour changer de jour, de semaine ou de mois
-    (function (el) {
-      var x0 = null, y0 = 0, mode = null;
-      el.addEventListener("pointerdown", function (ev) { if (ev.button || ev.target.closest(".swipe")) return; x0 = ev.clientX; y0 = ev.clientY; mode = null; });
-      el.addEventListener("pointermove", function (ev) {
-        if (x0 == null || mode) return;
-        var mx = ev.clientX - x0, my = ev.clientY - y0;
-        if (Math.abs(my) > 12 && Math.abs(my) > Math.abs(mx)) { x0 = null; return; }
-        if (Math.abs(mx) > 60) { mode = "h"; x0 = null; journalShift(mx < 0 ? 1 : -1); }
-      });
-      el.addEventListener("pointerup", function () { x0 = null; });
-      el.addEventListener("pointercancel", function () { x0 = null; });
-    })(body);
 
     mount(h("main", { class: "screen" },
       h("div", { class: "row between", vars: { "align-items": "flex-end" } },
@@ -1711,6 +1698,43 @@
     else m.classList.add("enter-fade");
   }
   window.addEventListener("hashchange", function () { closeSheet(); route(); });
+
+  // Glisser de droite à gauche (ou l'inverse) pour passer d'un onglet à l'autre
+  var TABS = ["#/", "#/journal", "#/tendances", "#/famille"];
+  (function () {
+    var x0 = null, y0 = 0, t0 = 0, lock = null, main = null;
+    function blocked(el) {
+      return sheetRoot.firstChild || (fab.el && fab.level) || !appEl.querySelector(".dock") ||
+        (el.closest && el.closest(".swipe, input, textarea, select, .sheet, .fab-root"));
+    }
+    document.addEventListener("touchstart", function (e) {
+      if (e.touches.length !== 1 || blocked(e.target)) { x0 = null; return; }
+      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; t0 = Date.now(); lock = null; main = appEl.querySelector("main.screen");
+    }, { passive: true });
+    document.addEventListener("touchmove", function (e) {
+      if (x0 == null || e.touches.length !== 1) return;
+      var dx = e.touches[0].clientX - x0, dy = e.touches[0].clientY - y0;
+      if (!lock && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) lock = Math.abs(dx) > Math.abs(dy) * 1.3 ? "h" : "v";
+      if (lock === "h" && main) { main.style.transition = "none"; main.style.transform = "translateX(" + Math.round(dx * 0.25) + "px)"; main.style.opacity = String(1 - Math.min(0.35, Math.abs(dx) / 900)); }
+    }, { passive: true });
+    function end(e) {
+      if (x0 == null) return;
+      var t = e.changedTouches && e.changedTouches[0], dx = t ? t.clientX - x0 : 0;
+      var fast = Date.now() - t0 < 700, wasH = lock === "h";
+      x0 = null;
+      if (main) { main.style.transition = "transform .25s ease, opacity .25s ease"; main.style.transform = ""; main.style.opacity = ""; }
+      if (!wasH || Math.abs(dx) < (fast ? 60 : 110)) return;
+      var cur = location.hash === "" || location.hash === "#" ? "#/" : location.hash;
+      var i = TABS.indexOf(cur); if (i < 0) return;
+      var j = i + (dx < 0 ? 1 : -1);
+      if (j >= 0 && j < TABS.length) { if (main) main.style.transition = "none"; location.hash = TABS[j]; }
+    }
+    document.addEventListener("touchend", end, { passive: true });
+    document.addEventListener("touchcancel", function () { x0 = null; if (main) { main.style.transform = ""; main.style.opacity = ""; } }, { passive: true });
+  })();
+  // Pas de zoom : pincement (Safari) et double tap
+  document.addEventListener("gesturestart", function (e) { e.preventDefault(); });
+  document.addEventListener("touchmove", function (e) { if (typeof e.scale === "number" && e.scale !== 1) e.preventDefault(); }, { passive: false });
 
   function screenName() {
     var input = h("input", { class: "input", maxlength: 60, autocomplete: "given-name", placeholder: "Votre prénom" });
