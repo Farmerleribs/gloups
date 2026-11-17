@@ -507,6 +507,7 @@
           h("span", { class: "small muted", text: ageLabel(c) })),
         h("a", { href: "#/famille", class: "row", "aria-label": "Famille et réglages", vars: { "text-decoration": "none", gap: "0" } }, membersInit)),
       lives,
+      !sleeping ? napCard(canWrite) : null,
       h("section", { class: "stack", vars: { gap: "8px" } },
         h("span", { class: "eyebrow", text: "Depuis le dernier" }),
         h("div", { class: "tiles" },
@@ -514,13 +515,15 @@
           tile("Couche", CAT_COLOR.couche, lastDiaper ? ago(lastDiaper.started_at) : "-", lastDiaper ? (lastDiaper.data.poo ? "selles" : "pipi") : "aucune", function () { sheetDiaper(); }),
           tile("Sommeil", CAT_COLOR.sommeil, sleeping ? dur((Date.now() - new Date(sleeping.started_at)) / 60000) : lastSleep ? ago(lastSleep.ended_at || lastSleep.started_at) : "-", sleeping ? "il dort" : lastSleep ? "éveillé" : "aucun", function () { sheetSleep(); }))),
       h("section", { class: "card" },
-        h("div", { class: "row between" }, h("span", { class: "eyebrow", text: "Aujourd'hui" }), h("a", { href: "#/journal", class: "small", text: "Journal" })),
+        h("div", { class: "row between" }, h("span", { class: "eyebrow", text: "Aujourd'hui" }), h("a", { href: "#/journal", class: "small", text: "Voir le journal" })),
+        dayStrip(today, { label: "Frise des 24 heures : sommeils, repas et couches" }), hourAxis(),
+        legend([["l-sleep", "Sommeil"], ["l-feed", "Repas"], ["l-diaper", "Couches"]]),
         h("div", { class: "counts" },
           h("div", null, h("b", { text: evToday.filter(function (e) { return CAT[e.type] === "repas" && e.type !== "feed.pump"; }).length }), h("span", { vars: { color: CAT_COLOR.repas }, text: "repas" })),
           h("div", null, h("b", { text: evToday.filter(function (e) { return e.type === "diaper" && e.data.pee; }).length }), h("span", { vars: { color: CAT_COLOR.couche }, text: "mouillées" })),
           h("div", null, h("b", { text: evToday.filter(function (e) { return e.type === "diaper" && e.data.poo; }).length }), h("span", { vars: { color: CAT_COLOR.couche }, text: "selles" })),
           h("div", null, h("b", { text: dur(sleepMin).replace(NB + "h" + NB, "h") }), h("span", { vars: { color: CAT_COLOR.sommeil }, text: "sommeil" }))),
-        h("div", { class: "list" }, recent.length ? recent.map(function (e) { return eventRow(e, canWrite); }) : h("span", { class: "empty", text: "Pas encore de saisie. Utilisez les boutons en bas." }))),
+        h("div", { class: "list" }, recent.length ? recent.map(function (e) { return eventRow(e, canWrite); }) : h("span", { class: "empty", text: "Pas encore de saisie. Utilisez les boutons en bas, elles s'afficheront sur la frise." }))),
       !isStandalone() && !lsGet("gloups.installHidden") ? h("a", { href: "#/installer", class: "card ok", vars: { "text-decoration": "none" } }, h("b", { text: "Installer Gloups sur l'écran d'accueil" }), h("span", { class: "small", text: "Plein écran, plus rapide, un tap pour noter." })) : null
     ));
     appEl.append(dock("home", canWrite, suggested));
@@ -562,12 +565,12 @@
     var tab = function (href, txt, key) { return h("a", { href: href, "aria-current": active === key ? "page" : null, text: txt }); };
     return h("div", { class: "dock-wrap" }, h("nav", { class: "dock", "aria-label": "Saisie rapide et navigation" },
       active === "home" ? quick : null,
-      h("div", { class: "tabs" }, tab("#/", "Aujourd'hui", "home"), tab("#/journal", "Journal", "journal"), tab("#/famille", "Famille", "famille"))));
+      h("div", { class: "tabs" }, tab("#/", "Aujourd'hui", "home"), tab("#/journal", "Journal", "journal"), tab("#/tendances", "Tendances", "tendances"), tab("#/famille", "Famille", "famille"))));
   }
 
   function childSwitcher() {
     openSheet("Changer d'enfant", h("div", { class: "stack" }, S.children.map(function (c) {
-      return h("button", { class: "btn full", vars: { "justify-content": "flex-start" }, onclick: async function () { S.child = c; lsSet("gloups.child", c.id); closeSheet(); await loadEvents(); route(); } },
+      return h("button", { class: "btn full", vars: { "justify-content": "flex-start" }, onclick: async function () { S.child = c; weights = null; lsSet("gloups.child", c.id); closeSheet(); await loadEvents(); route(); } },
         h("span", { class: "avatar", vars: { background: c.color, width: "32px", height: "32px" }, text: initials(c.first_name) }), c.first_name);
     })));
   }
@@ -707,7 +710,8 @@
     if (method) row.method = method;
     var r = await health.from("measurements").insert(row);
     if (r.error) { toast(errMsg(r.error), { error: true }); return false; }
-    closeSheet(); return true;
+    if (kind === "weight_g") weights = null;
+    closeSheet(); route(); return true;
   }
   function sheetTemp() {
     var inp = h("input", { class: "input", type: "number", inputmode: "decimal", step: "0.1", min: "34", max: "43", placeholder: "37,2" });
@@ -733,19 +737,248 @@
       }, text: "Enregistrer" })));
   }
 
+  /* ---------- Graphiques et frises (vides tant qu'il n'y a pas de données) ---------- */
+  var DAY_MS = 86400000;
+  var DAYS_SHORT = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
+  function isFeed(e) { return e.type === "feed.breast" || e.type === "feed.bottle"; }
+  function evEnd(e) { return e.ended_at ? new Date(e.ended_at).getTime() : Date.now(); }
+  // Morceaux d'événements dans une journée donnée, en heures (0 à 24)
+  function inDay(dayStart, pred) {
+    var a0 = dayStart, b0 = dayStart + DAY_MS;
+    return S.events.filter(pred).map(function (e) {
+      var a = new Date(e.started_at).getTime(), b = Math.max(a, evEnd(e));
+      if (b < a0 || a >= b0) return null;
+      return { e: e, a: (Math.max(a, a0) - a0) / 3600000, b: (Math.min(b, b0) - a0) / 3600000, min: (Math.min(b, b0) - Math.max(a, a0)) / 60000 };
+    }).filter(Boolean);
+  }
+  function startsIn(dayStart, pred) {
+    return S.events.filter(function (e) { var t = new Date(e.started_at).getTime(); return pred(e) && t >= dayStart && t < dayStart + DAY_MS; });
+  }
+  function last7() { var t = startOfDay(new Date()).getTime(), out = []; for (var i = 6; i >= 0; i--) out.push(t - i * DAY_MS); return out; }
+  function pct(x) { return (Math.max(0, Math.min(24, x)) / 24 * 100).toFixed(2) + "%"; }
+  function hourAxis() { return h("div", { class: "axis" }, ["0 h", "6 h", "12 h", "18 h", "24 h"].map(function (t) { return h("span", { text: t }); })); }
+  function legend(items) { return h("div", { class: "legend" }, items.map(function (it) { return h("span", null, h("i", { class: it[0] }), it[1]); })); }
+
+  // Frise horizontale d'une journée : sommeils en blocs, repas en points, couches en carrés
+  function dayStrip(dayStart, opts) {
+    opts = opts || {};
+    var track = h("div", { class: "strip" + (opts.compact ? " compact" : ""), role: "img", "aria-label": opts.label || "Frise des 24 heures" }, h("div", { class: "bar" }));
+    inDay(dayStart, function (e) { return e.type === "sleep"; }).forEach(function (s) {
+      track.append(h("div", { class: "seg-sleep" + (s.e.ended_at ? "" : " on"), vars: { left: pct(s.a), width: "max(3px, " + pct(s.b - s.a) + ")" } }));
+    });
+    startsIn(dayStart, isFeed).forEach(function (e) { track.append(h("div", { class: "dot-feed", vars: { left: pct((new Date(e.started_at) - dayStart) / 3600000) } })); });
+    if (!opts.compact) startsIn(dayStart, function (e) { return e.type === "diaper"; }).forEach(function (e) { track.append(h("div", { class: "dot-diaper", vars: { left: pct((new Date(e.started_at) - dayStart) / 3600000) } })); });
+    if (dayStart === startOfDay(new Date()).getTime()) track.append(h("div", { class: "now", vars: { left: pct((Date.now() - dayStart) / 3600000) } }));
+    return track;
+  }
+
+  // Estimation de la prochaine sieste à partir des éveils observés (médiane), sans valeur externe
+  function nextNap() {
+    var sleeps = S.events.filter(function (e) { return e.type === "sleep" && e.ended_at; }).slice().sort(function (a, b) { return new Date(a.started_at) - new Date(b.started_at); });
+    var gaps = [];
+    for (var i = 1; i < sleeps.length; i++) {
+      var g = (new Date(sleeps[i].started_at) - new Date(sleeps[i - 1].ended_at)) / 60000;
+      if (g > 0 && g < 360) gaps.push(g);
+    }
+    if (gaps.length < 3 || !sleeps.length) return null;
+    gaps = gaps.slice(-12).sort(function (a, b) { return a - b; });
+    var med = gaps[Math.floor(gaps.length / 2)];
+    var at = new Date(new Date(sleeps[sleeps.length - 1].ended_at).getTime() + med * 60000);
+    return { at: at, med: med, n: gaps.length };
+  }
+  function napCard(canWrite) {
+    var n = nextNap();
+    return h("section", { class: "nap", "aria-label": "Prochaine sieste" },
+      h("div", { class: "stack", vars: { gap: "4px" } },
+        h("span", { class: "k", text: "Prochaine sieste estimée" }),
+        h("span", { class: "v", text: n ? "vers " + hhmm(n.at) : "à venir" }),
+        h("span", { class: "s", text: n ? "D'après ses " + n.n + " derniers éveils (" + dur(n.med) + " en général)" : "Estimée dès 3 sommeils notés, à partir de son propre rythme" })),
+      canWrite ? h("button", { class: "nap-btn", "aria-label": "Il s'endort maintenant", onclick: sheetSleep }, icon("moon", 24)) : null);
+  }
+
+  // Histogramme sur 7 jours avec bande de repère
+  function barChart(o) {
+    var max = o.max, chart = h("div", { class: "bars", role: "img", "aria-label": o.title });
+    if (o.band) chart.append(h("div", { class: "band " + o.cls, vars: { bottom: (o.band[0] / max * 100) + "%", height: ((o.band[1] - o.band[0]) / max * 100) + "%" } }),
+      h("span", { class: "band-l " + o.cls, vars: { bottom: (o.band[1] / max * 100) + "%" }, text: o.bandLabel }));
+    o.values.forEach(function (v, i) {
+      chart.append(h("div", { class: "col" }, h("div", { class: "fill " + o.cls + (o.low && v != null && v > 0 && v < o.band[0] ? " low" : ""), vars: { height: v ? Math.min(100, v / max * 100) + "%" : "0" } })));
+    });
+    var days = o.days.map(function (d, i) { return h("span", { text: i === 6 ? "auj." : DAYS_SHORT[new Date(d).getDay()] }); });
+    var has = o.values.some(function (v) { return v > 0; });
+    return h("section", { class: "card chart" },
+      h("div", { class: "row between" }, h("h2", { class: "title-m", text: o.title }), h("span", { class: "avg " + o.cls, text: has ? "moy. " + o.fmt(o.avg) : "aucune donnée" })),
+      chart, h("div", { class: "bars-x" }, days), o.extra || null);
+  }
+  function mean(vals) { var v = vals.filter(function (x) { return x > 0; }); return v.length ? v.reduce(function (a, b) { return a + b; }, 0) / v.length : 0; }
+  function dec(x) { return (Math.round(x * 10) / 10).toString().replace(".", ","); }
+
+  /* ---------- Écran : tendances ---------- */
+  var weights = null;
+  async function loadWeights() {
+    var r = await health.from("measurements").select("value, measured_at").eq("child_id", S.child.id).eq("kind", "weight_g").is("deleted_at", null).order("measured_at").limit(200);
+    weights = r.error ? [] : (r.data || []);
+    if (location.hash === "#/tendances") screenTrends();
+  }
+  function screenTrends() {
+    var canWrite = S.role === "parent" || S.role === "proche";
+    if (!S.child) { screenHome(); return; }
+    if (weights === null) loadWeights();
+    var days = last7();
+    var sleepH = days.map(function (d) { return inDay(d, function (e) { return e.type === "sleep"; }).reduce(function (s, x) { return s + x.min; }, 0) / 60; });
+    var feeds = days.map(function (d) { return startsIn(d, isFeed).length; });
+    var wet = days.map(function (d) { return startsIn(d, function (e) { return e.type === "diaper" && e.data && e.data.pee; }).length; });
+    var breastMin = days.map(function (d) { return inDay(d, function (e) { return e.type === "feed.breast" && e.ended_at; }).reduce(function (s, x) { return s + x.min; }, 0); });
+    var allFeeds = S.events.filter(isFeed).slice().sort(function (a, b) { return new Date(a.started_at) - new Date(b.started_at); });
+    var gaps = []; for (var i = 1; i < allFeeds.length; i++) { var g = (new Date(allFeeds[i].started_at) - new Date(allFeeds[i - 1].started_at)) / 60000; if (g > 0 && g < 480) gaps.push(g); }
+    var left = 0, right = 0;
+    S.events.forEach(function (e) { if (e.type === "feed.breast" && e.ended_at) { var m = (new Date(e.ended_at) - new Date(e.started_at)) / 60000; if (e.data.side === "left") left += m; else if (e.data.side === "right") right += m; else { left += m / 2; right += m / 2; } } });
+    var stat = function (v, l) { return h("div", null, h("b", { text: v }), h("span", { text: l })); };
+
+    // Rythme
+    var rhythm = h("section", { class: "card chart" },
+      h("div", { class: "row between" }, h("h2", { class: "title-m", text: "Rythme" }), h("span", { class: "small muted", text: "7 derniers jours" })),
+      h("div", { class: "rhythm" }, days.map(function (d, i) {
+        return h("div", { class: "rrow" }, h("span", { class: "d", text: i === 6 ? "auj." : DAYS_SHORT[new Date(d).getDay()] }), dayStrip(d, { compact: true, label: dayLabel(d) }));
+      })),
+      h("div", { class: "rhythm-x" }, hourAxis()),
+      legend([["l-sleep", "Sommeil"], ["l-feed", "Repas"]]));
+
+    // Pleurs : carte de chaleur 7 x 24
+    var cryMin = 0;
+    var heat = h("div", { class: "heat", role: "img", "aria-label": "Pleurs par heure sur 7 jours" }, days.map(function (d, i) {
+      var cells = []; for (var hh = 0; hh < 24; hh++) cells.push(0);
+      inDay(d, function (e) { return e.type === "cry"; }).forEach(function (s) {
+        cryMin += s.min;
+        for (var hh2 = Math.floor(s.a); hh2 < Math.min(24, Math.ceil(s.b)); hh2++) cells[hh2] += Math.max(0, Math.min(s.b, hh2 + 1) - Math.max(s.a, hh2)) * 60;
+      });
+      return h("div", { class: "hrow" }, h("span", { class: "d", text: i === 6 ? "auj." : DAYS_SHORT[new Date(d).getDay()] }),
+        h("div", { class: "cells" }, cells.map(function (m) { return h("span", { vars: m > 0 ? { background: "rgba(176,74,58," + (0.2 + Math.min(1, m / 30) * 0.75).toFixed(2) + ")" } : null }); })));
+    }));
+    var cryDays = days.filter(function (d) { return S.events.some(function (e) { var t = new Date(e.started_at).getTime(); return t >= d && t < d + DAY_MS; }); }).length;
+
+    // Poids
+    var wBody;
+    var W = (weights || []).map(function (w) { return { t: new Date(w.measured_at).getTime(), kg: w.value / 1000 }; });
+    var svg = document.createElementNS(SVGNS, "svg");
+    svg.setAttribute("viewBox", "0 0 320 130"); svg.setAttribute("preserveAspectRatio", "none"); svg.setAttribute("class", "wsvg"); svg.setAttribute("aria-hidden", "true");
+    var base = document.createElementNS(SVGNS, "line");
+    [["x1", 0], ["y1", 112], ["x2", 320], ["y2", 112], ["stroke", "#E4DCCB"], ["vector-effect", "non-scaling-stroke"]].forEach(function (p) { base.setAttribute(p[0], p[1]); });
+    svg.appendChild(base);
+    var wWrap = h("div", { class: "wchart", role: "img", "aria-label": W.length ? "Courbe de poids" : "Courbe de poids vide" }, svg);
+    if (W.length) {
+      var t0 = W[0].t, t1 = Math.max(W[W.length - 1].t, t0 + DAY_MS);
+      var lo = Math.min.apply(null, W.map(function (w) { return w.kg; })), hi = Math.max.apply(null, W.map(function (w) { return w.kg; }));
+      var pad2 = Math.max(0.1, (hi - lo) * 0.25); lo -= pad2; hi += pad2;
+      var X = function (t) { return 16 + (t - t0) / (t1 - t0) * 288; }, Y = function (kg) { return 100 - (kg - lo) / (hi - lo) * 80; };
+      var pl = document.createElementNS(SVGNS, "polyline");
+      pl.setAttribute("points", W.map(function (w) { return X(w.t).toFixed(1) + "," + Y(w.kg).toFixed(1); }).join(" "));
+      [["fill", "none"], ["stroke", "#2E5D94"], ["stroke-width", "2.5"], ["stroke-linejoin", "round"], ["vector-effect", "non-scaling-stroke"]].forEach(function (p) { pl.setAttribute(p[0], p[1]); });
+      svg.appendChild(pl);
+      W.forEach(function (w) { wWrap.append(h("span", { class: "wdot", vars: { left: (X(w.t) / 320 * 100) + "%", top: (Y(w.kg) / 130 * 100) + "%" } })); });
+      wBody = h("span", { class: "avg sante", text: dec(W[W.length - 1].kg).replace(/(,\d)$/, "$1") + NB + "kg le " + new Date(W[W.length - 1].t).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) });
+    } else {
+      wWrap.append(h("span", { class: "wempty", text: canWrite ? "Notez un poids avec Plus, puis Poids" : "Aucun poids noté" }));
+      wBody = h("span", { class: "avg sante", text: "aucune donnée" });
+    }
+
+    mount(h("main", { class: "screen" },
+      h("span", { class: "eyebrow", text: S.child.first_name + " · 7 derniers jours" }),
+      h("h1", { class: "title-l", text: "Tendances" }),
+      rhythm,
+      barChart({ title: "Sommeil / 24 h", cls: "sommeil", days: days, values: sleepH, max: 20, band: [14, 17], bandLabel: "repère 14 à 17 h", avg: mean(sleepH), fmt: function (x) { return dur(x * 60); } }),
+      barChart({ title: "Repas / 24 h", cls: "repas", days: days, values: feeds, max: 15, band: [8, 12], bandLabel: "repère 8 à 12", avg: mean(feeds), fmt: dec,
+        extra: h("div", { class: "stats" },
+          stat(mean(breastMin) ? dur(mean(breastMin)) : "-", "au sein / jour"),
+          stat(gaps.length ? dur(gaps.reduce(function (a, b) { return a + b; }, 0) / gaps.length) : "-", "écart moyen"),
+          stat(left + right ? Math.round(left / (left + right) * 100) + " / " + Math.round(right / (left + right) * 100) : "-", "% gauche / droit")) }),
+      barChart({ title: "Couches mouillées", cls: "couche", days: days, values: wet, max: 10, band: [6, 8], bandLabel: "repère 6 à 8", avg: mean(wet), fmt: dec, low: true }),
+      h("section", { class: "card chart" },
+        h("div", { class: "row between" }, h("h2", { class: "title-m", text: "Pleurs par heure" }), h("span", { class: "avg pleurs", text: cryMin ? Math.round(cryMin / Math.max(1, cryDays)) + NB + "min / jour" : "aucune donnée" })),
+        heat, h("div", { class: "heat-x" }, hourAxis())),
+      h("section", { class: "card chart" },
+        h("div", { class: "row between" }, h("h2", { class: "title-m", text: "Poids" }), wBody), wWrap),
+      h("p", { class: "small muted", text: "Repères indicatifs, à discuter avec la sage-femme ou le pédiatre. Sommeil : National Sleep Foundation (0 à 3 mois). Repas : AFPA, premier mois. Couches : Manuel MSD." })));
+    appEl.append(dock("tendances", canWrite));
+  }
+
   /* ---------- Écran : journal ---------- */
+  var J = { day: null, view: lsGet("gloups.jview") || "frise" };
   function screenJournal() {
     var canWrite = S.role === "parent" || S.role === "proche";
-    var groups = {};
-    S.events.forEach(function (e) { var k = startOfDay(e.started_at).getTime(); (groups[k] = groups[k] || []).push(e); });
-    var keys = Object.keys(groups).sort(function (a, b) { return b - a; });
+    var days = last7();
+    if (J.day == null || days.indexOf(J.day) < 0) J.day = days[6];
+    var d0 = J.day, isToday = d0 === days[6];
+    var dayEvs = S.events.filter(function (e) { var t = new Date(e.started_at).getTime(); return t >= d0 && t < d0 + DAY_MS; });
+
+    var picker = h("div", { class: "days" }, days.map(function (d) {
+      var x = new Date(d);
+      return h("button", { "aria-pressed": d === d0 ? "true" : "false", "aria-label": dayLabel(d), onclick: function () { J.day = d; screenJournal(); } },
+        h("span", { class: "w", text: DAYS_SHORT[x.getDay()] }), h("span", { class: "n", text: x.getDate() }));
+    }));
+    var seg = h("div", { class: "seg mini" }, [["frise", "Frise"], ["liste", "Liste"]].map(function (o) {
+      return h("button", { "aria-pressed": J.view === o[0] ? "true" : "false", onclick: function () { J.view = o[0]; lsSet("gloups.jview", o[0]); screenJournal(); }, text: o[1] });
+    }));
+
+    var body;
+    if (J.view === "liste") {
+      var list = dayEvs.slice().sort(function (a, b) { return new Date(b.started_at) - new Date(a.started_at); });
+      body = h("section", { class: "card" }, h("b", { class: "title-m", text: dayLabel(d0) }),
+        h("div", { class: "list" }, list.length ? list.map(function (e) { return eventRow(e, canWrite); }) : h("span", { class: "empty", text: "Aucune saisie ce jour." })));
+    } else {
+      var PX = 28, grid = h("div", { class: "tl-body", vars: { height: (24 * PX) + "px" } });
+      for (var i = 0; i <= 24; i++) grid.append(h("div", { class: "tl-hour" + (i % 3 === 0 ? " major" : ""), vars: { top: (i * PX) + "px" } }, h("span", { text: i % 2 === 0 && i < 24 ? pad(i) + ":00" : "" })));
+      var block = function (col, a, b, cls, txt, minH) {
+        var top = a * PX, hgt = Math.max(minH, (b - a) * PX - 2);
+        return h("div", { class: "tl-ev tl-c" + col + " " + cls, vars: { top: top + "px", height: hgt + "px" } }, h("span", { text: txt }));
+      };
+      inDay(d0, function (e) { return e.type === "sleep"; }).forEach(function (x) {
+        grid.append(block(0, x.a, x.b, "sommeil" + (x.e.ended_at ? "" : " on"), hhmm(x.e.started_at) + " · " + (x.e.ended_at ? dur(x.min) : "en cours"), 22));
+      });
+      inDay(d0, isFeed).forEach(function (x) {
+        var d = x.e.data || {}, t = x.e.type === "feed.bottle" ? (d.ml != null ? d.ml + NB + "ml" : "Biberon") : ({ left: "G", right: "D", both: "G+D" }[d.side] || "Sein") + " " + (x.e.ended_at ? Math.round(x.min) + "'" : "...");
+        grid.append(block(1, x.a, x.b, "repas", t, 20));
+      });
+      startsIn(d0, function (e) { return e.type === "diaper"; }).forEach(function (e) {
+        var a = (new Date(e.started_at) - d0) / 3600000, d = e.data || {};
+        grid.append(block(2, a, a, "couche" + (d.poo ? " poo" : ""), d.pee && d.poo ? "les deux" : d.poo ? "selles" : "pipi", 20));
+      });
+      inDay(d0, function (e) { return ["cry", "bath", "note", "feed.pump"].indexOf(e.type) >= 0; }).forEach(function (x) {
+        var t = { cry: "Pleurs", bath: "Bain", note: "Note", "feed.pump": "Tire-lait" }[x.e.type];
+        if (x.e.type === "cry" && x.e.ended_at && x.min >= 1) t += " " + Math.round(x.min) + "'";
+        grid.append(block(3, x.a, x.b, x.e.type === "cry" ? "pleurs" : x.e.type === "note" ? "neutre" : "sante", t, 20));
+      });
+      if (isToday) {
+        var ny = (Date.now() - d0) / 3600000 * PX;
+        grid.append(h("div", { class: "tl-now", vars: { top: ny + "px" } }, h("span", { text: hhmm(new Date()) })));
+      }
+      body = h("section", { class: "card tl", "aria-label": "Frise de la journée" },
+        h("div", { class: "tl-head" }, h("span", { class: "sommeil", text: "Sommeil" }), h("span", { class: "repas", text: "Repas" }), h("span", { class: "couche", text: "Couches" }), h("span", { class: "pleurs", text: "Autres" })),
+        grid.querySelector(".tl-ev") ? null : h("span", { class: "empty", text: isToday ? "Rien de noté aujourd'hui. Chaque saisie apparaîtra ici à son heure." : "Aucune saisie ce jour." }),
+        grid);
+    }
+
+    var feedsN = dayEvs.filter(isFeed).length;
+    var breast = inDay(d0, function (e) { return e.type === "feed.breast" && e.ended_at; }).reduce(function (s2, x) { return s2 + x.min; }, 0);
+    var wetN = dayEvs.filter(function (e) { return e.type === "diaper" && e.data && e.data.pee; }).length;
+    var pooN = dayEvs.filter(function (e) { return e.type === "diaper" && e.data && e.data.poo; }).length;
+    var sleepM = inDay(d0, function (e) { return e.type === "sleep"; }).reduce(function (s2, x) { return s2 + x.min; }, 0);
+    var cries = inDay(d0, function (e) { return e.type === "cry"; });
+    var cryM = cries.reduce(function (s2, x) { return s2 + x.min; }, 0);
+    var sum = function (v, n) { return h("div", null, h("b", { text: v }), h("span", { text: n })); };
+
     mount(h("main", { class: "screen" },
-      h("span", { class: "eyebrow", text: S.child ? S.child.first_name + " · 7 derniers jours" : "" }),
-      h("h1", { class: "title-l", text: "Journal" }),
-      keys.length ? keys.map(function (k) {
-        return h("section", { class: "card" }, h("b", { class: "title-m", text: dayLabel(+k) }),
-          h("div", { class: "list" }, groups[k].map(function (e) { return eventRow(e, canWrite); })));
-      }) : h("p", { class: "empty", text: "Rien sur les 7 derniers jours." })));
+      h("div", { class: "row between", vars: { "align-items": "flex-end" } },
+        h("div", { class: "stack", vars: { gap: "2px" } }, h("span", { class: "eyebrow", text: S.child ? S.child.first_name + (ageLabel(S.child) ? " · " + ageLabel(S.child) : "") : "" }), h("h1", { class: "title-l", text: "Journal" })),
+        seg),
+      picker, body,
+      h("section", { class: "card green sum" },
+        h("span", { class: "eyebrow", text: isToday ? "Depuis minuit" : dayLabel(d0) }),
+        h("div", { class: "sum-grid" },
+          sum(feedsN + " repas", breast ? dur(breast) + " au sein" : "aucune tétée chronométrée"),
+          sum(wetN + " + " + pooN, "couches mouillées + selles"),
+          sum(dur(sleepM), "de sommeil"),
+          sum(cryM >= 1 ? dur(cryM) : "0 min", "de pleurs, " + cries.length + " épisode" + (cries.length > 1 ? "s" : ""))))));
     appEl.append(dock("journal", canWrite));
   }
 
@@ -853,6 +1086,7 @@
     if (!S.family) { screenOnboarding(); return; }
     var r = location.hash.replace(/^#\/?/, "");
     if (r === "journal") screenJournal();
+    else if (r === "tendances") screenTrends();
     else if (r === "famille") screenFamily();
     else if (r === "installer") screenInstall();
     else screenHome();
