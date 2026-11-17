@@ -1,5 +1,5 @@
 /* Gloups · service worker : l'app s'ouvre même hors connexion. Les données passent toujours par le réseau. */
-var VERSION = "gloups-0.5.0";
+var VERSION = "gloups-0.6.0";
 var SHELL = ["./", "index.html", "css/app.css", "js/config.js", "js/supabase.js", "js/app.js", "manifest.webmanifest",
   "fonts/google-sans-flex.woff2", "icons/icon.svg", "icons/apple-touch-icon.png", "icons/icon-192.png", "icons/icon-512.png"];
 
