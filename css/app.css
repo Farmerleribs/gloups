@@ -528,3 +528,40 @@ body { touch-action: pan-y; overflow-x: hidden; overscroll-behavior-x: none; }
 .sheet { touch-action: pan-y; overscroll-behavior: none; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
 .peek-layer, .peek { touch-action: none; }
 html.sheet-open, html.sheet-open body { overflow: hidden; }
+
+/* ---------- v0.6.3 : parents connectés et synchronisation ---------- */
+.who-side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex: none; }
+.mstack { display: flex; text-decoration: none; min-height: 44px; align-items: center; }
+.mstack .mav { border: 2px solid var(--bg); }
+.mstack .mav + .mav { margin-left: -10px; }
+.mav { position: relative; }
+.mav.more { background: #E4DDCF; color: #3C463F; width: 34px; height: 34px; font-size: 12px; }
+.mav.on::after { content: ""; position: absolute; right: -1px; bottom: -1px; width: 11px; height: 11px; border-radius: 50%; background: #2FA36B; border: 2px solid var(--bg); animation: gl-on 2.4s ease-in-out infinite; }
+.card .mav.on::after { border-color: var(--card, #FFFFFF); }
+@keyframes gl-on { 0%, 100% { box-shadow: 0 0 0 0 rgba(47,163,107,0.45); } 50% { box-shadow: 0 0 0 4px rgba(47,163,107,0); } }
+.sync { font-size: 12px; color: #4C564F; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.sync::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #2B7262; }
+.sync.wait::before { background: #A8661A; animation: gl-breath 1.2s ease-in-out infinite; }
+.sync.off { color: #8E3829; }
+.sync.off::before { background: #B04A3A; }
+@media (prefers-reduced-motion: reduce) { .mav.on::after, .sync.wait::before { animation: none; } }
+
+/* ---------- v0.6.3 : tableau de bord administrateur ---------- */
+.kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.kpi { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.kpi b { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.kpi span { font-size: 12.5px; color: var(--ink); }
+.kpi .sub { font-size: 11px; color: var(--muted); }
+.spark { height: 64px; display: flex; align-items: flex-end; gap: 2px; border-bottom: 1px solid var(--line); }
+.spark span { flex: 1; border-radius: 2px 2px 0 0; min-width: 0; }
+.hbar { display: grid; grid-template-columns: 82px 1fr auto; align-items: center; gap: 10px; font-size: 13.5px; }
+.hbar .t { height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; display: block; }
+.hbar .t span { display: block; height: 100%; border-radius: 5px; }
+.hbar b { font-variant-numeric: tabular-nums; min-width: 28px; text-align: right; }
+
+/* ---------- v0.6.3 : jumeaux, choisir pour qui on note ---------- */
+.for-seg button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; }
+.for-seg button .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--child); flex: none; }
+.fab-who { position: fixed; left: 16px; right: 16px; bottom: calc(56px + 350px + var(--safe-bottom)); z-index: 46; opacity: 0; transform: translateY(12px); pointer-events: none; transition: opacity .3s ease, transform .4s cubic-bezier(.2,.8,.2,1); }
+.fab-root.open.has-who .fab-who { opacity: 1; transform: none; pointer-events: auto; }
+.fab-who .seg { box-shadow: 0 6px 20px rgba(30,42,36,.12); }
