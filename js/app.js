@@ -93,6 +93,12 @@
     list: "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
     chart: "M5 20V11M12 20V5M19 20v-8",
     cal: "M4 6h16v14H4zM4 10h16M8 3v4M16 3v4",
+    music: "M9 18V5l11-2v13M9 18a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0zM20 16a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0z",
+    noise: "M3 12h2M7 8v8M11 5v14M15 9v6M19 7v10",
+    play: "M8 5l11 7-11 7z",
+    heart: "M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z",
+    pause: "M9 5v14M15 5v14",
+    stop: "M7 7h10v10H7z",
     addsq: "M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM12 8v8M8 12h8",
     family: "M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2 20c0-3 3-5 6-5s6 2 6 5M14 15.5c3 0 8 1 8 4.5"
   };
@@ -411,7 +417,13 @@
   }
   async function stopEvent(ev) {
     var at = new Date().toISOString();
-    var r = await sb.from("events").update({ ended_at: at }).eq("id", ev.id).select().single();
+    var patch = { ended_at: at };
+    if (SND.id && SND.linked === ev.id) {
+      // Pleurs : on retient le son qui jouait, pour « la dernière fois » ; sieste : le son s'arrête avec elle
+      if (ev.type === "cry" && !SND.paused) patch.data = Object.assign({}, ev.data || {}, { soothe: SND.id });
+      if (ev.type === "sleep") sndStop();
+    }
+    var r = await sb.from("events").update(patch).eq("id", ev.id).select().single();
     if (r.error) { toast(errMsg(r.error), { error: true }); return null; }
     // Minuteur lancé pour les deux : on l'arrête aussi pour l'autre enfant
     if (ev.data && ev.data.twin_group) await sb.from("events").update({ ended_at: at }).eq("family_id", S.family.id).eq("data->>twin_group", ev.data.twin_group).is("ended_at", null);
@@ -419,6 +431,7 @@
     return r.data;
   }
   async function removeEvent(ev, silent, wholeGroup) {
+    if (SND.id && SND.linked === ev.id) sndStop();
     if (wholeGroup && ev.data && ev.data.twin_group) await sb.from("events").update({ deleted_at: new Date().toISOString() }).eq("family_id", S.family.id).eq("data->>twin_group", ev.data.twin_group).neq("id", ev.id);
     var r = await sb.from("events").update({ deleted_at: new Date().toISOString() }).eq("id", ev.id);
     if (r.error) { toast(errMsg(r.error), { error: true }); return; }
@@ -657,6 +670,7 @@
         h("div", { class: "who-side" },
           h("a", { href: "#/famille", class: "mstack", "aria-label": "Membres de la famille" }, membersInit),
           syncBadge())),
+      sootheCard(),
       !sleeping ? napCard(canWrite) : null,
       nextApptCard(),
       h("section", { class: "stack", vars: { gap: "8px" } },
@@ -766,7 +780,7 @@
     pleurs: ["Pleurs", "pleurs", "wave", 60], plus: ["Plus", "neutre", "dots", 60],
     g: ["Sein gauche", "repas", "G", 78], d: ["Sein droit", "repas", "D", 78], biberon: ["Biberon", "repas", "bottle", 58], tirelait: ["Tire-lait", "repas", "drop", 58],
     pipi: ["Pipi", "couche", "drop", 64], deux: ["Les deux", "couche", "diaper", 64], selles: ["Selles", "couche", "diaper", 64],
-    bain: ["Bain", "sante", "bath", 56], temp: ["Température", "sante", "temp", 56], poids: ["Poids", "sante", "scale", 56], note: ["Note", "neutre", "note", 56]
+    bain: ["Bain", "sante", "bath", 56], temp: ["Température", "sante", "temp", 56], poids: ["Poids", "sante", "scale", 56], note: ["Note", "neutre", "note", 56], sons: ["Sons", "sommeil", "music", 56]
   };
   function arc(ids) {
     var o = {}, n = ids.length;
@@ -777,7 +791,7 @@
     root: arc(["repas", "sommeil", "couche", "pleurs", "plus"]),
     repas: { g: [-92, -112], d: [92, -112], biberon: [-46, -218], tirelait: [46, -218] },
     couche: { pipi: [-104, -96], deux: [0, -168], selles: [104, -96] },
-    plus: arc(["bain", "temp", "poids", "note"])
+    plus: arc(["bain", "temp", "poids", "note", "sons"])
   };
   var QUESTION = { root: "Que se passe-t-il ?", repas: "Quel repas ?", couche: "Quelle couche ?", plus: "Autre saisie" };
   var fab = { el: null, level: null, canWrite: false, bubbles: {}, pills: {} };
@@ -796,7 +810,11 @@
     track("fab", id);
     switch (id) {
       case "repas": case "couche": case "plus": go(id); return;
-      case "sommeil": then(function () { var c = runningOf("sleep"); if (c) stopWithToast(c); else logEvent("sleep", {}, { running: true }); }); return;
+      case "sommeil": then(async function () {
+        var c = runningOf("sleep"); if (c) { stopWithToast(c); return; }
+        var ev = await logEvent("sleep", {}, { running: true }); var s2 = lsGet("gloups.sndSleep");
+        if (ev && s2 && s2 !== "none") sndPlay(s2, sndMinutes(), ev.id);
+      }); return;
       case "pleurs": then(function () { var c = runningOf("cry"); if (c) stopWithToast(c); else logEvent("cry", {}, { running: true }); }); return;
       case "g": then(function () { dockBreast("left"); }); return;
       case "d": then(function () { dockBreast("right"); }); return;
@@ -809,6 +827,7 @@
       case "temp": then(sheetTemp); return;
       case "poids": then(sheetWeight); return;
       case "note": then(sheetNote); return;
+      case "sons": then(function () { sheetSounds(); }); return;
     }
   }
   function fabBuild() {
@@ -882,6 +901,7 @@
       fab.parts.pills.append(el);
     });
     document.documentElement.style.setProperty("--pills-h", (live.length * 72) + "px");
+    sndRender();
   }
   function pill(ev, canWrite) {
     var acts = h("div", { class: "acts" });
@@ -904,6 +924,141 @@
       return h("button", { class: "btn full", vars: { "justify-content": "flex-start" }, onclick: async function () { S.child = c; weights = null; lsSet("gloups.child", c.id); closeSheet(); await loadEvents(); route(); } },
         h("span", { class: "avatar", vars: { background: c.color, width: "32px", height: "32px" }, text: initials(c.first_name) }), c.first_name);
     })));
+  }
+
+  /* ---------- Berceuses et sons apaisants ---------- */
+  // Créés pour Gloups : airs traditionnels ou classiques libres de droits, bruits générés. Fichiers dans audio/.
+  var SOUNDS = [
+    { id: "clair", name: "Au clair de la lune", kind: "berceuse" }, { id: "etoile", name: "Ah ! vous dirai-je, maman", kind: "berceuse" },
+    { id: "jacques", name: "Frère Jacques", kind: "berceuse" }, { id: "brahms", name: "Berceuse de Brahms", kind: "berceuse" },
+    { id: "gymno", name: "Gymnopédie n° 1", kind: "berceuse" }, { id: "canon", name: "Canon de Pachelbel", kind: "berceuse" },
+    { id: "green", name: "Greensleeves", kind: "berceuse" }, { id: "ode", name: "Ode à la joie", kind: "berceuse" },
+    { id: "blanc", name: "Bruit blanc", kind: "bruit" }, { id: "rose", name: "Bruit rose, plus doux", kind: "bruit" },
+    { id: "grave", name: "Bruit grave, comme un ventilateur", kind: "bruit" }, { id: "pluie", name: "Pluie douce", kind: "bruit" },
+    { id: "chut", name: "Chut répété", kind: "bruit" }, { id: "coeur", name: "Battements de cœur", kind: "bruit" },
+    { id: "vagues", name: "Vagues", kind: "bruit" }
+  ];
+  var IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  var SND = { audio: null, id: null, until: null, paused: false, timer: null, el: null, linked: null, vol: +(lsGet("gloups.sndVol") || 0.8) };
+  function sndInfo(id) { return SOUNDS.find(function (x) { return x.id === id; }); }
+  function sndMinutes() { return lsGet("gloups.sndT") || "30"; }
+  function sndPlay(id, minutes, linkedId) {
+    if (!SND.audio) { SND.audio = new Audio(); SND.audio.loop = true; SND.audio.preload = "auto"; SND.audio.setAttribute("playsinline", ""); }
+    var a = SND.audio;
+    if (SND.id !== id || !a.src) a.src = "audio/" + id + ".m4a";
+    SND.id = id; SND.paused = false; SND.linked = linkedId || null;
+    if (!IOS) a.volume = SND.vol;
+    var m = minutes || sndMinutes();
+    SND.until = m === "inf" ? null : Date.now() + (+m) * 60000;
+    var pr = a.play(); if (pr && pr.catch) pr.catch(function () { SND.paused = true; sndRender(); });
+    clearInterval(SND.timer); SND.timer = setInterval(sndTick, 1000);
+    if ("mediaSession" in navigator) {
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({ title: sndInfo(id).name, artist: "Gloups", artwork: [{ src: "icons/icon-512.png", sizes: "512x512", type: "image/png" }] });
+        navigator.mediaSession.setActionHandler("play", function () { sndToggle(); });
+        navigator.mediaSession.setActionHandler("pause", function () { sndToggle(); });
+        navigator.mediaSession.setActionHandler("stop", function () { sndStop(); });
+      } catch (e) { /* rien */ }
+    }
+    track("action", "son_" + id);
+    sndRender();
+  }
+  function sndToggle() {
+    if (!SND.id) return;
+    if (SND.paused) { SND.paused = false; var pr = SND.audio.play(); if (pr && pr.catch) pr.catch(function () {}); }
+    else { SND.paused = true; SND.audio.pause(); }
+    sndRender();
+  }
+  function sndStop() {
+    if (SND.audio) { SND.audio.pause(); if (!IOS) SND.audio.volume = SND.vol; }
+    SND.id = null; SND.until = null; SND.linked = null; clearInterval(SND.timer);
+    if ("mediaSession" in navigator) { try { navigator.mediaSession.metadata = null; } catch (e) { /* rien */ } }
+    sndRender();
+  }
+  function sndTick() {
+    if (!SND.id) return;
+    if (SND.until && !SND.paused) {
+      var left = SND.until - Date.now();
+      if (left <= 0) { sndStop(); return; }
+      if (left < 60000 && !IOS) SND.audio.volume = SND.vol * left / 60000; // baisse douce la dernière minute
+    }
+    var t = SND.el && SND.el.querySelector(".snd-left"); if (t) t.textContent = sndLeftText();
+  }
+  function sndLeftText() {
+    if (SND.paused) return "en pause";
+    if (!SND.until) return "en boucle";
+    var m = Math.max(1, Math.ceil((SND.until - Date.now()) / 60000));
+    return "s'arrête dans " + m + NB + "min";
+  }
+  // Pastille de lecture, au-dessus des minuteurs
+  function sndRender() {
+    if (SND.el) { SND.el.remove(); SND.el = null; }
+    if (SND.id && fab.parts && fab.el && fab.el.classList.contains("shown")) {
+      var inf = sndInfo(SND.id);
+      SND.el = h("div", { class: "pill snd" },
+        h("button", { class: "snd-open", "aria-label": "Tous les sons", onclick: function () { sheetSounds(); } },
+          h("span", { class: "snd-ico" + (SND.paused ? "" : " on") }, SND.paused ? icon(inf.kind === "berceuse" ? "music" : "noise", 18) : h("span", { class: "eq", "aria-hidden": "true" }, h("i"), h("i"), h("i"), h("i"))),
+          h("span", { class: "txt" }, h("span", { class: "t2", text: inf.name }), h("span", { class: "snd-left", text: sndLeftText() }))),
+        h("div", { class: "acts" },
+          h("button", { class: "rnd", "aria-label": SND.paused ? "Reprendre" : "Pause", onclick: sndToggle }, icon(SND.paused ? "play" : "pause", 18)),
+          h("button", { class: "rnd", "aria-label": "Arrêter le son", onclick: sndStop }, icon("stop", 16))));
+      fab.parts.pills.append(SND.el);
+    }
+    var n = Object.keys(fab.pills || {}).length + (SND.el ? 1 : 0);
+    document.documentElement.style.setProperty("--pills-h", (n * 72) + "px");
+    var card = document.querySelector("main .soothe"); if (card) card.replaceWith(sootheCard());
+  }
+  // Toute la bibliothèque : berceuses, bruits, minuterie, volume
+  function sheetSounds(tab) {
+    tab = tab || ((sndInfo(SND.id || lsGet("gloups.snd") || "clair") || {}).kind) || "berceuse";
+    var body = h("div", { class: "stack" });
+    function draw() {
+      var seg = h("div", { class: "seg" }, [["berceuse", "Berceuses"], ["bruit", "Bruits apaisants"]].map(function (o) {
+        return h("button", { "aria-pressed": tab === o[0] ? "true" : "false", onclick: function () { tab = o[0]; draw(); }, text: o[1] });
+      }));
+      var list = h("div", { class: "snd-list" }, SOUNDS.filter(function (x) { return x.kind === tab; }).map(function (x) {
+        var on = SND.id === x.id && !SND.paused;
+        return h("button", { class: "snd-row" + (on ? " on" : ""), "aria-pressed": on ? "true" : "false", onclick: function () {
+          if (SND.id === x.id) sndToggle(); else sndPlay(x.id, null, SND.linked);
+          lsSet("gloups.snd", x.id); draw();
+        } },
+          h("span", { class: "snd-ico" + (on ? " on" : "") }, on ? h("span", { class: "eq", "aria-hidden": "true" }, h("i"), h("i"), h("i"), h("i")) : icon(x.kind === "berceuse" ? "music" : "noise", 20)),
+          h("span", { class: "txt" }, h("b", { text: x.name }), h("span", { class: "small muted", text: on ? sndLeftText() : x.kind === "berceuse" ? "boîte à musique, en boucle" : "continu" })),
+          h("span", { class: "snd-act", text: on ? "Pause" : SND.id === x.id ? "Reprendre" : "Écouter" }));
+      }));
+      var mins = sndMinutes();
+      var tseg = h("div", { class: "seg" }, [["15", "15 min"], ["30", "30 min"], ["45", "45 min"], ["inf", "Jamais"]].map(function (o) {
+        return h("button", { "aria-pressed": mins === o[0] ? "true" : "false", onclick: function () {
+          lsSet("gloups.sndT", o[0]); if (SND.id) SND.until = o[0] === "inf" ? null : Date.now() + (+o[0]) * 60000; draw(); sndRender();
+        }, text: o[1] });
+      }));
+      var vol = IOS ? h("span", { class: "small muted", text: "Volume : utilisez les boutons du téléphone." })
+        : h("label", { class: "row", vars: { gap: "10px" } }, h("span", { class: "small muted", text: "Volume" }), h("input", { type: "range", min: "0", max: "100", value: String(Math.round(SND.vol * 100)), "aria-label": "Volume", vars: { flex: "1" }, oninput: function (e) { SND.vol = e.target.value / 100; lsSet("gloups.sndVol", String(SND.vol)); if (SND.audio) SND.audio.volume = SND.vol; } }));
+      body.replaceChildren(seg, list,
+        h("div", { class: "field" }, h("span", { text: "S'arrête après" }), tseg),
+        h("span", { class: "small muted", text: "Le volume baisse doucement la dernière minute." }), vol,
+        SND.id ? h("button", { class: "btn ghost full", onclick: function () { sndStop(); draw(); }, text: "Arrêter le son" }) : null,
+        h("span", { class: "small muted", text: "Berceuses créées pour Gloups sur des airs libres de droits." }));
+    }
+    draw();
+    openSheet("Sons apaisants", body);
+  }
+  // Pendant des pleurs : apaiser en un tap, et ce qui a marché la dernière fois
+  function sootheCard() {
+    var cry = runningOf("cry");
+    if (!cry) return h("span", { class: "soothe", hidden: true });
+    var opts = [["chut", "Chut répété"], ["coeur", "Battements de cœur"], ["blanc", "Bruit blanc"]];
+    var last = S.events.find(function (e) { return e.type === "cry" && e.ended_at && e.data && e.data.soothe; });
+    var lastTxt = last ? (sndInfo(last.data.soothe) || {}).name + ", calmé en " + dur((new Date(last.ended_at) - new Date(last.started_at)) / 60000) : null;
+    return h("section", { class: "card soothe" },
+      h("div", { class: "row between" }, h("b", { text: "Apaiser" }), h("button", { class: "linkbtn", onclick: function () { sheetSounds("bruit"); }, text: "Tous les sons" })),
+      h("div", { class: "soothe-grid" }, opts.map(function (o) {
+        var on = SND.id === o[0] && !SND.paused;
+        return h("button", { class: "soothe-btn s-" + o[0] + (on ? " on" : ""), "aria-pressed": on ? "true" : "false", onclick: function () {
+          if (on) sndStop(); else sndPlay(o[0], "30", cry.id);
+        } }, h("span", { class: "disc" }, on ? h("span", { class: "eq", "aria-hidden": "true" }, h("i"), h("i"), h("i"), h("i")) : icon(o[0] === "coeur" ? "heart" : o[0] === "chut" ? "wave" : "noise", 22)), h("span", { text: o[1] }));
+      })),
+      lastTxt ? h("span", { class: "small muted", text: "La dernière fois : " + lastTxt + "." }) : null);
   }
 
   /* ---------- Feuilles de saisie ---------- */
@@ -1034,9 +1189,33 @@
     }
     var start = h("input", { class: "input", type: "time", value: hhmm(new Date(Date.now() - 3600000)) });
     var end = h("input", { class: "input", type: "time", value: hhmm(new Date()) });
+    // Pour l'endormir : un son lancé en même temps que la sieste, retenu pour la prochaine fois
+    var pickS = lsGet("gloups.sndSleep") || "none", pickT = sndMinutes();
+    var sndBox = h("div", { class: "stack", vars: { gap: "8px" } });
+    var go = h("button", { class: "bigbtn sommeil", onclick: async function () {
+      var d = {}; if (place.value()) d.place = place.value();
+      lsSet("gloups.sndSleep", pickS); lsSet("gloups.sndT", pickT);
+      var ev = await logEvent("sleep", d, { running: true });
+      if (ev && pickS !== "none") sndPlay(pickS, pickT, ev.id);
+    } });
+    function drawSnd() {
+      var ids = ["none", "clair", "blanc", "pluie"]; var last = lsGet("gloups.snd"); if (last && ids.indexOf(last) < 0) ids.splice(1, 0, last);
+      var chips = h("div", { class: "chips" }, ids.map(function (id) {
+        return h("button", { class: "chip", "aria-pressed": pickS === id ? "true" : "false", onclick: function () { pickS = id; drawSnd(); }, text: id === "none" ? "Aucun son" : sndInfo(id).name });
+      }));
+      var tseg = h("div", { class: "seg" }, [["15", "15 min"], ["30", "30 min"], ["45", "45 min"], ["inf", "Jamais"]].map(function (o) {
+        return h("button", { "aria-pressed": pickT === o[0] ? "true" : "false", onclick: function () { pickT = o[0]; drawSnd(); }, text: o[1] });
+      }));
+      sndBox.replaceChildren(
+        h("div", { class: "row between" }, h("span", { class: "small muted", vars: { "font-weight": "700" }, text: "Pour l'endormir" }), h("button", { class: "linkbtn", onclick: function () { sheetSounds(); }, text: "Tous les sons" })),
+        chips,
+        pickS !== "none" ? h("div", { class: "field" }, h("span", { text: "S'arrête après" }), tseg) : null);
+      go.textContent = pickS === "none" ? "Il s'endort maintenant" : "Il s'endort, lancer " + sndInfo(pickS).name.toLowerCase();
+    }
+    drawSnd();
     openSheet("Sommeil", h("div", { class: "stack" }, entryPicker(),
-      place.el,
-      h("button", { class: "bigbtn sommeil", onclick: function () { var d = {}; if (place.value()) d.place = place.value(); logEvent("sleep", d, { running: true }); }, text: "Il s'endort maintenant" }),
+      place.el, sndBox,
+      go,
       h("div", { class: "card" }, h("b", { text: "Ou noter un sommeil passé" }),
         h("div", { class: "big2" }, h("label", { class: "field" }, h("span", { text: "Endormi à" }), start), h("label", { class: "field" }, h("span", { text: "Réveillé à" }), end)),
         h("button", { class: "btn full", onclick: function () {
