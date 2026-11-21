@@ -573,3 +573,36 @@ html, body { overscroll-behavior-y: auto; }
 .swatch { min-height: 64px; border: 2px solid transparent; border-radius: 14px; background: var(--soft); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; font-size: 12px; font-weight: 650; line-height: 1.15; padding: 6px 4px; text-align: center; }
 .swatch .sw { width: 24px; height: 24px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(30,42,36,.18); }
 .swatch[aria-pressed="true"] { border-color: var(--green); background: var(--card, #FFFDF8); }
+
+/* ---------- v0.6.6 : accueil en couleur, guide Safari illustré ---------- */
+.screen.plain.welcome { gap: 18px; padding-top: 0; }
+.whero { margin: 0 -18px; padding: calc(48px + var(--safe-top, 0px)) 24px 30px; background: var(--green); color: #F7F2E8; border-radius: 0 0 32px 32px; display: flex; flex-direction: column; gap: 10px; }
+.whero .title-xl { color: #F7F2E8; margin: 6px 0 0; }
+.whero p { margin: 0; font-size: 18px; line-height: 1.35; color: #E3EFE8; }
+.wfeats { display: flex; flex-direction: column; gap: 14px; padding: 6px 2px 0; }
+.wfeat { display: flex; align-items: center; gap: 14px; }
+.wico { width: 48px; height: 48px; border-radius: 15px; display: flex; align-items: center; justify-content: center; flex: none; }
+.wico.repas { background: #F5E4C8; color: #8A5212; } .wico.couche { background: #D6ECE4; color: #1F5C4F; }
+.wico.sommeil { background: #E6E2F5; color: #4A4190; } .wico.sante { background: #DAE5F2; color: #264F80; }
+.wtx { display: flex; flex-direction: column; gap: 1px; } .wtx b { font-size: 16px; } .wtx span { font-size: 14px; color: #4C564F; }
+.steps.guide .gstep { align-items: flex-start; }
+.gt { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.mock-bar { display: flex; align-items: center; gap: 8px; background: #EDE8DE; border-radius: 22px; padding: 6px 6px 6px 14px; font-size: 13px; color: #4C564F; }
+.mock-url { flex: 1; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mock-dots { width: 36px; height: 36px; border-radius: 50%; background: #FFFFFF; display: flex; align-items: center; justify-content: center; color: var(--ink); box-shadow: 0 0 0 3px #2FA36B; animation: guidePulse 1.6s ease-in-out infinite; }
+.mock-menu { display: flex; flex-direction: column; background: #EDE8DE; border-radius: 14px; overflow: hidden; }
+.mock-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; font-size: 14px; font-weight: 600; border-bottom: 1px solid #E0D8C8; }
+.mock-row:last-child { border-bottom: 0; }
+.mock-menu .mock-row { justify-content: flex-start; }
+.mock-row.hl { background: #FFFFFF; box-shadow: inset 0 0 0 2px #2FA36B; }
+.mock-add { background: #EDE8DE; border-radius: 14px; overflow: hidden; }
+.mock-addtop { display: flex; justify-content: space-between; padding: 10px 12px; font-size: 14px; border-bottom: 1px solid #E0D8C8; }
+.mock-pulse { color: #1F6FD1; border-radius: 8px; padding: 0 4px; box-shadow: 0 0 0 2px #2FA36B; }
+.mock-switch { width: 44px; height: 26px; border-radius: 13px; background: #34C759; position: relative; flex: none; }
+.mock-switch::after { content: ""; position: absolute; right: 3px; top: 3px; width: 20px; height: 20px; border-radius: 50%; background: #FFFFFF; }
+@keyframes guidePulse { 0%, 100% { box-shadow: 0 0 0 3px rgba(47,163,107,.9); } 50% { box-shadow: 0 0 0 7px rgba(47,163,107,.25); } }
+.point-down { position: fixed; right: 12px; bottom: calc(12px + var(--safe-bottom)); display: flex; align-items: center; gap: 6px; background: var(--green); color: #F7F2E8; font-size: 13px; font-weight: 750; padding: 8px 10px 8px 14px; border-radius: 16px; box-shadow: 0 8px 20px rgba(30,42,36,.25); z-index: 30; pointer-events: none; animation: pointBob 1.2s ease-in-out infinite; }
+.point-down svg { transform: rotate(-90deg); }
+.screen.plain:has(.point-down) { padding-bottom: calc(88px + var(--safe-bottom)); }
+@keyframes pointBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) { .mock-dots, .point-down { animation: none; } }
