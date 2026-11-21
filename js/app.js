@@ -93,6 +93,7 @@
     list: "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
     chart: "M5 20V11M12 20V5M19 20v-8",
     cal: "M4 6h16v14H4zM4 10h16M8 3v4M16 3v4",
+    addsq: "M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM12 8v8M8 12h8",
     family: "M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2 20c0-3 3-5 6-5s6 2 6 5M14 15.5c3 0 8 1 8 4.5"
   };
   function icon(name, size) {
@@ -441,15 +442,20 @@
   /* ---------- Écran : connexion ---------- */
   function screenWelcome() {
     var invite = lsGet("gloups.invite");
-    mount(h("main", { class: "screen plain" },
-      h("div", { class: "stack", vars: { "margin-top": "12vh" } },
+    var feat = function (ic, cls, t1, t2) { return h("div", { class: "wfeat" }, h("span", { class: "wico " + cls }, icon(ic, 22)), h("span", { class: "wtx" }, h("b", { text: t1 }), h("span", { text: t2 }))); };
+    mount(h("main", { class: "screen plain welcome" },
+      h("div", { class: "whero" },
         logo(),
         h("h1", { class: "title-xl", text: "Gloups" }),
-        h("p", { class: "muted", vars: { "font-size": "18px" }, text: "Le carnet de bébé pour toute la famille." }),
-        invite ? h("div", { class: "card ok" }, h("b", { text: "Invitation reçue (" + invite + ")" }), h("span", { class: "small", text: "Connectez-vous pour rejoindre la famille." })) : null
-      ),
+        h("p", { text: "Le carnet de bébé pour toute la famille." })),
+      invite ? h("div", { class: "card ok" }, h("b", { text: "Invitation reçue (" + invite + ")" }), h("span", { class: "small", text: "Connectez-vous pour rejoindre la famille." })) : null,
+      h("div", { class: "wfeats" },
+        feat("bottle", "repas", "Noter en un tap", "tétées, biberons, couches, sommeil"),
+        feat("family", "couche", "Partagé à deux", "chaque saisie arrive en direct"),
+        feat("moon", "sommeil", "Sa sieste anticipée", "d'après son propre rythme"),
+        feat("cal", "sante", "Rendez-vous et rappels", "pédiatre, PMI, vaccins")),
       h("div", { class: "stack", vars: { "margin-top": "auto" } },
-        h("button", { class: "btn dark full", onclick: signIn, text: "Continuer avec Google" }),
+        h("button", { class: "btn primary full", onclick: signIn, text: "Continuer avec Google" }),
         h("p", { class: "small muted", vars: { "text-align": "center" } }, "Gratuit, sans mot de passe. Données hébergées dans l'Union européenne. ",
           h("a", { href: "confidentialite.html", text: "Confidentialité" }), " · ", h("a", { href: "conditions.html", text: "Conditions" }))
       )
@@ -659,7 +665,7 @@
           tile("Dernier repas", CAT_COLOR.repas, lastFeed ? ago(lastFeed.ended_at || lastFeed.started_at) : "-", lastFeed ? label(lastFeed).replace("Tétée ", "sein ") : "aucun", function () { sheetFeed(); }, "repas"),
           // Couches : une quantité (changes du jour), pas une durée
           (function () { var nd = evToday.filter(function (e) { return e.type === "diaper"; }).length;
-            return tile("Couches", CAT_COLOR.couche, String(nd), "aujourd'hui", function () { sheetDiaper(); }, "couche"); })(),
+            return tile("Couches auj.", CAT_COLOR.couche, String(nd), lastDiaper ? "dernière " + ago(lastDiaper.started_at) : "aucune", function () { sheetDiaper(); }, "couche"); })(),
           tile("Sommeil", CAT_COLOR.sommeil, sleeping ? dur((Date.now() - new Date(sleeping.started_at)) / 60000) : lastSleep ? ago(lastSleep.ended_at || lastSleep.started_at) : "-", sleeping ? "il dort" : lastSleep ? "éveillé" : "aucun", function () { sheetSleep(); }, "sommeil"))),
       h("section", { class: "card" },
         h("div", { class: "row between" }, h("span", { class: "eyebrow", text: "Aujourd'hui" }), h("a", { href: "#/journal", class: "small", text: "Voir le journal" })),
@@ -1907,6 +1913,7 @@
         S.deferredInstall.prompt(); await S.deferredInstall.userChoice; S.deferredInstall = null;
       }, text: "Installer Gloups" }),
       h("span", { class: "small muted", text: "Si rien ne s'affiche : menu ⋮ puis « Ajouter à l'écran d'accueil »." }));
+    else if (b === "safari") content = safariGuide();
     else content = h("ol", { class: "steps" }, steps[b].map(function (s, i) { return h("li", null, h("span", { class: "n", text: i + 1 }), h("span", { class: "t" }, h("b", { text: s[0] }), h("span", { text: s[1] }))); }));
     mount(h("main", { class: "screen plain" },
       h("a", { href: "#/", class: "row small", vars: { "text-decoration": "none", "font-weight": "650" } }, icon("back", 18), "Retour"),
@@ -1915,6 +1922,24 @@
       h("span", { class: "small muted", text: "Détecté : " + names[b] }), seg, content,
       S.family ? h("div", { class: "card ok small", text: "Votre famille est déjà enregistrée : depuis l'icône, vous retrouvez tout." }) : null,
       h("button", { class: "btn ghost", onclick: function () { lsSet("gloups.installHidden", "1"); location.hash = "#/"; }, text: "Plus tard, continuer dans le navigateur" })));
+  }
+  // Guide Safari en images : chaque étape montre le bouton exact à toucher
+  function safariGuide() {
+    var step = function (n, title, help, mock) { return h("li", { class: "gstep" }, h("span", { class: "n", text: n }), h("div", { class: "gt" }, h("b", { text: title }), help ? h("span", { class: "small muted", text: help }) : null, mock)); };
+    var bar = h("div", { class: "mock-bar" }, h("span", { class: "mock-url", text: location.host }), h("span", { class: "mock-dots", "aria-label": "bouton •••" }, icon("dots", 20)));
+    var menu = h("div", { class: "mock-menu" }, h("span", { class: "mock-row hl" }, icon("share", 18), "Partager"));
+    var sheet = h("div", { class: "mock-menu" }, h("span", { class: "mock-row" }, icon("note", 18), "Ajouter un signet"), h("span", { class: "mock-row hl" }, icon("addsq", 18), "Sur l'écran d'accueil"));
+    var add = h("div", { class: "mock-add" },
+      h("div", { class: "mock-addtop" }, h("span", { class: "muted", text: "Annuler" }), h("b", { text: "Ajouter", class: "mock-pulse" })),
+      h("div", { class: "mock-row" }, h("span", { text: "Ouvrir comme app web" }), h("span", { class: "mock-switch" })));
+    return h("div", { class: "stack safari-guide" },
+      h("ol", { class: "steps guide" },
+        step(1, "Touchez le bouton ••• de la barre d'adresse", "En bas de l'écran, à droite de l'adresse.", bar),
+        step(2, "Touchez Partager", null, menu),
+        step(3, "Descendez et touchez « Sur l'écran d'accueil »", "Faites défiler la liste si besoin.", sheet),
+        step(4, "Laissez « Ouvrir comme app web » activé, puis Ajouter", "L'icône Gloups apparaît avec vos apps.", add)),
+      h("span", { class: "small muted", text: "Sur un iPhone plus ancien (iOS 18 ou avant) : touchez directement l'icône Partager en bas de l'écran, puis reprenez à l'étape 3." }),
+      h("div", { class: "point-down", "aria-hidden": "true" }, h("span", { text: "Le bouton ••• est en bas" }), icon("back", 20)));
   }
   window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); S.deferredInstall = e; });
 
