@@ -221,7 +221,15 @@
   var sheetRoot = document.getElementById("sheet-root");
   var toastRoot = document.getElementById("toast-root");
   var PEEK = false; // vrai pendant le rendu de l'écran voisin, affiché sous le doigt
-  function mount(node) { if (PEEK) { appEl.replaceChildren(node); return; } if (fab.el) fabSync(false); appEl.replaceChildren(node); window.scrollTo(0, 0); }
+  var SCROLL_TOP = true; // vrai seulement quand on arrive sur un autre écran
+  function mount(node) {
+    if (PEEK) { appEl.replaceChildren(node); return; }
+    if (fab.el) fabSync(false);
+    var y = window.scrollY;
+    appEl.replaceChildren(node);
+    if (SCROLL_TOP) window.scrollTo(0, 0); else if (window.scrollY !== y) window.scrollTo(0, y);
+    SCROLL_TOP = false;
+  }
 
   var toastTimer = null;
   function toast(msg, opts) {
@@ -394,7 +402,8 @@
     S.fresh = { id: mine.id, cat: CAT[mine.type], t: Date.now() };
     closeSheet();
     route();
-    toast(label(mine) + (group ? " · " + allLabel().toLowerCase() : "") + (opts.running ? " · minuteur lancé" : " · " + hhmm(mine.started_at)), {
+    // Minuteur lancé : la pastille du minuteur suffit, pas de bandeau en plus
+    if (!opts.running) toast(label(mine) + (group ? " · " + allLabel().toLowerCase() : "") + " · " + hhmm(mine.started_at), {
       action: { label: "Annuler", fn: function () { removeEvent(mine, true, true); } }
     });
     return mine;
@@ -645,10 +654,12 @@
       !sleeping ? napCard(canWrite) : null,
       nextApptCard(),
       h("section", { class: "stack", vars: { gap: "8px" } },
-        h("span", { class: "eyebrow", text: "Depuis le dernier" }),
+        h("span", { class: "eyebrow", text: "En ce moment" }),
         h("div", { class: "tiles" },
-          tile("Repas", CAT_COLOR.repas, lastFeed ? ago(lastFeed.ended_at || lastFeed.started_at) : "-", lastFeed ? label(lastFeed).replace("Tétée ", "sein ") : "aucun", function () { sheetFeed(); }, "repas"),
-          tile("Couche", CAT_COLOR.couche, lastDiaper ? ago(lastDiaper.started_at) : "-", lastDiaper ? (lastDiaper.data.poo ? "selles" : "pipi") : "aucune", function () { sheetDiaper(); }, "couche"),
+          tile("Dernier repas", CAT_COLOR.repas, lastFeed ? ago(lastFeed.ended_at || lastFeed.started_at) : "-", lastFeed ? label(lastFeed).replace("Tétée ", "sein ") : "aucun", function () { sheetFeed(); }, "repas"),
+          // Couches : une quantité (changes du jour), pas une durée
+          (function () { var nd = evToday.filter(function (e) { return e.type === "diaper"; }).length;
+            return tile("Couches", CAT_COLOR.couche, String(nd), "aujourd'hui", function () { sheetDiaper(); }, "couche"); })(),
           tile("Sommeil", CAT_COLOR.sommeil, sleeping ? dur((Date.now() - new Date(sleeping.started_at)) / 60000) : lastSleep ? ago(lastSleep.ended_at || lastSleep.started_at) : "-", sleeping ? "il dort" : lastSleep ? "éveillé" : "aucun", function () { sheetSleep(); }, "sommeil"))),
       h("section", { class: "card" },
         h("div", { class: "row between" }, h("span", { class: "eyebrow", text: "Aujourd'hui" }), h("a", { href: "#/journal", class: "small", text: "Voir le journal" })),
@@ -721,7 +732,9 @@
       return h("a", { href: href, "aria-current": active === key ? "page" : null, "data-tab": key }, icon(ic, 22), h("span", { text: txt }));
     };
     if (!PEEK) fabSync(true, canWrite);
-    var ind = h("span", { class: "tab-ind", "aria-hidden": "true" });
+    // L'indicateur naît déjà à sa dernière place : pas de glissement depuis la gauche à chaque nouvel affichage
+    var ind = h("span", { class: "tab-ind" + (tabInd.x != null ? " on" : ""), "aria-hidden": "true" });
+    if (tabInd.x != null) ind.style.transform = "translateX(" + tabInd.x + "px)";
     var nav = h("nav", { class: "dock" + (canWrite ? " has-fab" : ""), "aria-label": "Navigation principale" },
       tab("#/", "home", "Aujourd'hui", "home"), tab("#/journal", "list", "Journal", "journal"),
       canWrite ? h("span", { class: "fab-gap", "aria-hidden": "true" }) : null,
@@ -734,6 +747,7 @@
         ind.style.transition = ""; ind.classList.add("moving");
         setTimeout(function () { ind.classList.remove("moving"); }, 380);
       }
+      else if (tabInd.x == null) { ind.style.transition = "none"; ind.style.transform = "translateX(" + x + "px)"; void ind.offsetWidth; ind.style.transition = ""; }
       ind.style.transform = "translateX(" + x + "px)"; ind.classList.add("on");
       tabInd.x = x;
     });
@@ -783,8 +797,8 @@
       case "biberon": then(sheetBottle); return;
       case "tirelait": then(sheetPump); return;
       case "pipi": then(function () { logEvent("diaper", { pee: true, poo: false }); }); return;
-      case "selles": then(function () { logEvent("diaper", { pee: false, poo: true }); }); return;
-      case "deux": then(function () { logEvent("diaper", { pee: true, poo: true }); }); return;
+      case "selles": then(function () { sheetPoo(false); }); return;
+      case "deux": then(function () { sheetPoo(true); }); return;
       case "bain": then(function () { logEvent("bath", {}); }); return;
       case "temp": then(sheetTemp); return;
       case "poids": then(sheetWeight); return;
@@ -958,24 +972,51 @@
     openSheet("Tire-lait", h("div", { class: "stack" }, entryPicker(), ml.el, side.el, t.el,
       h("button", { class: "btn primary full", onclick: function () { var d = {}; if (ml.value()) d.ml = parseInt(ml.value(), 10); if (side.value()) d.side = side.value(); logEvent("feed.pump", d, { started: t.value() }); }, text: "Enregistrer" })));
   }
-  function sheetDiaper() {
-    var color = selectField("Couleur des selles", COLORS);
-    var texture = selectField("Consistance", TEXTURES);
-    var t = timeChooser();
+  // Couleurs affichées en vrai, pour choisir d'un coup d'oeil
+  var COLOR_SWATCH = { yellow: "#E9C440", mustard: "#C99A2E", green: "#6E8B3D", brown: "#7A5230", black: "#2A2522", white: "#EFE8D6", red: "#B03A2E" };
+  function pickChips(map, swatches) {
+    var val = null, box = h("div", { class: swatches ? "swatches" : "chips", role: "group" });
+    function draw() {
+      box.replaceChildren.apply(box, Object.keys(map).map(function (k) {
+        return h("button", { type: "button", class: swatches ? "swatch" : "chip", "aria-pressed": val === k ? "true" : "false", onclick: function () { val = val === k ? null : k; draw(); if (box.onpick) box.onpick(val); } },
+          swatches ? h("span", { class: "sw", vars: { background: swatches[k] } }) : null, map[k]);
+      }));
+    }
+    draw();
+    return { el: box, value: function () { return val; } };
+  }
+  function sheetPoo(pee, started) {
+    var color = pickChips(COLORS, COLOR_SWATCH), texture = pickChips(TEXTURES);
     var warn = h("div", { class: "card alert small", hidden: true, text: "Selles blanches, noires ou avec du sang : demandez un avis médical sans attendre." });
-    color.el.querySelector("select").addEventListener("change", function (e) { warn.hidden = ["white", "black", "red"].indexOf(e.target.value) < 0; });
-    var save = function (pee, poo) { return function () {
-      var d = { pee: pee, poo: poo };
-      if (poo && color.value()) d.color = color.value();
-      if (poo && texture.value()) d.texture = texture.value();
-      logEvent("diaper", d, { started: t.value() });
+    // Les premiers jours, les selles noires ou vert foncé (méconium) sont normales
+    var bd = S.child && S.child.birth_date ? new Date(S.child.birth_date + "T00:00:00") : null;
+    var newborn = bd && (Date.now() - bd.getTime()) < 4 * 86400000;
+    color.el.onpick = function (v) {
+      if (v === "black" && newborn) { warn.className = "card small"; warn.textContent = "Les premières selles (méconium) sont noires ou vert foncé : c'est normal les premiers jours."; warn.hidden = false; return; }
+      warn.className = "card alert small"; warn.textContent = "Selles blanches, noires ou avec du sang : demandez un avis médical sans attendre.";
+      warn.hidden = ["white", "black", "red"].indexOf(v) < 0;
+    };
+    var save = function (details) { return function () {
+      var d = { pee: pee, poo: true };
+      if (details && color.value()) d.color = color.value();
+      if (details && texture.value()) d.texture = texture.value();
+      logEvent("diaper", d, { started: started || new Date() });
     }; };
+    openSheet(pee ? "Pipi et selles" : "Selles", h("div", { class: "stack" }, entryPicker(),
+      h("div", { class: "field" }, h("span", { text: "Couleur" }), color.el),
+      h("div", { class: "field" }, h("span", { text: "Aspect" }), texture.el),
+      warn,
+      h("button", { class: "btn primary full", onclick: save(true), text: "Enregistrer" }),
+      h("button", { class: "btn ghost full", onclick: save(false), text: "Enregistrer sans préciser" })));
+  }
+  function sheetDiaper() {
+    var t = timeChooser();
     openSheet("Couche", h("div", { class: "stack" }, entryPicker(),
       h("div", { class: "big3" },
-        h("button", { class: "bigbtn couche", onclick: save(true, false), text: "Pipi" }),
-        h("button", { class: "bigbtn couche", onclick: save(false, true), text: "Selles" }),
-        h("button", { class: "bigbtn couche", onclick: save(true, true), text: "Les deux" })),
-      t.el, color.el, texture.el, warn));
+        h("button", { class: "bigbtn couche", onclick: function () { logEvent("diaper", { pee: true, poo: false }, { started: t.value() }); }, text: "Pipi" }),
+        h("button", { class: "bigbtn couche", onclick: function () { sheetPoo(false, t.value()); }, text: "Selles" }),
+        h("button", { class: "bigbtn couche", onclick: function () { sheetPoo(true, t.value()); }, text: "Les deux" })),
+      t.el));
   }
   function sheetSleep() {
     var cur = running().find(function (e) { return e.type === "sleep"; });
@@ -1895,6 +1936,7 @@
     ENTER = key !== lastKey && !SW.nav;
     SW.nav = false;
     var prevIdx = TAB_IDX[lastKey ? lastKey.split("/")[1] : null];
+    if (key !== lastKey) SCROLL_TOP = true;
     if (key !== lastKey) track("screen", r === "journal" && J.view ? "journal_" + J.view : r || "accueil");
     lastKey = key;
     if (r === "journal") screenJournal();
