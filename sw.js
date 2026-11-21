@@ -1,5 +1,5 @@
 /* Gloups · service worker : l'app s'ouvre même hors connexion. Les données passent toujours par le réseau. */
-var VERSION = "gloups-0.6.6";
+var VERSION = "gloups-0.7.0";
 var SHELL = ["./", "index.html", "css/app.css", "js/config.js", "js/supabase.js", "js/app.js", "manifest.webmanifest",
   "fonts/google-sans-flex.woff2", "icons/icon.svg", "icons/apple-touch-icon.png", "icons/icon-192.png", "icons/icon-512.png"];
 
@@ -16,6 +16,8 @@ self.addEventListener("fetch", function (e) {
   if (req.method !== "GET") return;
   var url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // API Supabase : jamais en cache
+  // Sons : lecture directe par le navigateur (requêtes partielles), jamais via le cache
+  if (url.pathname.indexOf("/audio/") >= 0 || req.headers.has("range")) return;
   if (req.mode === "navigate") {
     // page : réseau d'abord (nouvelle version), cache si hors ligne
     e.respondWith(fetch(req).then(function (res) {
