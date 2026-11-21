@@ -910,6 +910,7 @@
         var stopped = await stopEvent(ev); if (!stopped) return;
         await logEvent("feed.breast", { side: ev.data.side === "left" ? "right" : "left" }, { running: true });
       } }, icon("swap", 18), h("span", { text: "Côté" })));
+      if (ev.type === "sleep" && !(SND.id && SND.linked === ev.id)) acts.append(h("button", { class: "swap", "aria-label": "Lancer un son", onclick: function () { sheetSleep(); } }, icon("music", 18), h("span", { text: "Son" })));
       acts.append(h("button", { class: "stop", onclick: function () { stopWithToast(ev); }, text: ev.type === "sleep" ? "Réveil" : "Terminer" }));
     }
     return h("div", { class: "pill", "data-id": ev.id },
@@ -961,7 +962,7 @@
       } catch (e) { /* rien */ }
     }
     track("action", "son_" + id);
-    sndRender();
+    sndRefresh();
   }
   function sndToggle() {
     if (!SND.id) return;
@@ -973,7 +974,7 @@
     if (SND.audio) { SND.audio.pause(); if (!IOS) SND.audio.volume = SND.vol; }
     SND.id = null; SND.until = null; SND.linked = null; clearInterval(SND.timer);
     if ("mediaSession" in navigator) { try { navigator.mediaSession.metadata = null; } catch (e) { /* rien */ } }
-    sndRender();
+    sndRefresh();
   }
   function sndTick() {
     if (!SND.id) return;
@@ -990,6 +991,7 @@
     var m = Math.max(1, Math.ceil((SND.until - Date.now()) / 60000));
     return "s'arrête dans " + m + NB + "min";
   }
+  function sndRefresh() { if (fab.el && fab.parts) fabSync(fab.el.classList.contains("shown"), fab.canWrite); else sndRender(); }
   // Pastille de lecture, au-dessus des minuteurs
   function sndRender() {
     if (SND.el) { SND.el.remove(); SND.el = null; }
@@ -1183,7 +1185,26 @@
     var cur = running().find(function (e) { return e.type === "sleep"; });
     var place = selectField("Lieu", PLACES);
     if (cur) {
+      // Sieste déjà lancée (par exemple avec le bouton +) : on peut encore lancer ou changer le son
+      var cS = SND.id && SND.linked === cur.id ? SND.id : (lsGet("gloups.sndSleep") && lsGet("gloups.sndSleep") !== "none" ? lsGet("gloups.sndSleep") : "clair"), cT = sndMinutes();
+      var cBox = h("div", { class: "stack", vars: { gap: "8px" } });
+      var drawCur = function () {
+        var playing = SND.id && SND.linked === cur.id && !SND.paused;
+        var ids = ["clair", "blanc", "pluie", "coeur"]; if (ids.indexOf(cS) < 0) ids.unshift(cS);
+        cBox.replaceChildren(
+          h("div", { class: "row between" }, h("span", { class: "small muted", vars: { "font-weight": "700" }, text: "Son pour la sieste" }), h("button", { class: "linkbtn", onclick: function () { sheetSounds(); }, text: "Tous les sons" })),
+          h("div", { class: "chips" }, ids.map(function (id) {
+            return h("button", { class: "chip", "aria-pressed": cS === id ? "true" : "false", onclick: function () { cS = id; if (playing) { sndPlay(cS, cT, cur.id); lsSet("gloups.sndSleep", cS); } drawCur(); }, text: sndInfo(id).name });
+          })),
+          h("div", { class: "field" }, h("span", { text: "S'arrête après" }), h("div", { class: "seg" }, [["15", "15 min"], ["30", "30 min"], ["45", "45 min"], ["inf", "Jamais"]].map(function (o) {
+            return h("button", { "aria-pressed": cT === o[0] ? "true" : "false", onclick: function () { cT = o[0]; lsSet("gloups.sndT", cT); if (playing) SND.until = cT === "inf" ? null : Date.now() + (+cT) * 60000; sndRender(); drawCur(); }, text: o[1] });
+          }))),
+          playing ? h("button", { class: "btn full", onclick: function () { sndStop(); drawCur(); }, text: "Arrêter le son" })
+            : h("button", { class: "bigbtn sommeil", onclick: function () { lsSet("gloups.sndSleep", cS); lsSet("gloups.sndT", cT); sndPlay(cS, cT, cur.id); closeSheet(); }, text: "Lancer " + sndInfo(cS).name.toLowerCase() }));
+      };
+      drawCur();
       openSheet("Sommeil", h("div", { class: "stack" }, h("p", { text: "Endormi depuis " + hhmm(cur.started_at) + " (" + ago(cur.started_at) + ")." }),
+        cBox,
         h("button", { class: "btn primary full", onclick: function () { closeSheet(); stopEvent(cur); }, text: "Il se réveille" })));
       return;
     }
