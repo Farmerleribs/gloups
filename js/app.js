@@ -256,6 +256,7 @@
     setTimeout(function () { if (bd.parentNode === sheetRoot) sheetRoot.removeChild(bd); if (!sheetRoot.firstChild) document.documentElement.classList.remove("sheet-open"); }, 240);
   }
   function openSheet(title, body) {
+    clearTimeout(toastTimer); toastRoot.replaceChildren(); // le bandeau ne doit pas masquer la feuille
     var sheet = h("div", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": title },
       h("div", { class: "grab" }),
       h("div", { class: "row between" }, h("h2", { class: "title-m", text: title }), h("button", { class: "btn ghost small", onclick: closeSheet, text: "Fermer" })),
@@ -839,7 +840,18 @@
       var disc = h("span", { class: "disc" }, b[2].length === 1 ? h("b", { text: b[2] }) : icon(b[2], b[3] > 60 ? 26 : 24),
         id === "g" || id === "d" ? h("span", { class: "sug", text: "suggéré" }) : null);
       var lbl = h("span", { class: "lbl", text: b[0] });
-      var btn = h("button", { class: "bub c-" + b[1], tabindex: "-1", "aria-hidden": "true", vars: { "--d": b[3] + "px" }, onclick: function () { fabAction(id); } }, disc, lbl);
+      var lp = null, lpDone = false;
+      var btn = h("button", { class: "bub c-" + b[1], tabindex: "-1", "aria-hidden": "true", vars: { "--d": b[3] + "px" }, onclick: function () { if (lpDone) { lpDone = false; return; } fabAction(id); } }, disc, lbl);
+      // Appui long : noter après coup (le tap reste instantané)
+      if (AFTER[id]) {
+        var cancel = function () { clearTimeout(lp); lp = null; };
+        btn.addEventListener("pointerdown", function () { lpDone = false; cancel(); lp = setTimeout(function () {
+          lpDone = true; lp = null; if (navigator.vibrate) try { navigator.vibrate(12); } catch (x) { /* rien */ }
+          lsSet("gloups.lpUsed", "1"); track("fab", "apres_" + id); fabLevel(null); sheetAfter(id);
+        }, 450); });
+        ["pointerup", "pointerleave", "pointercancel"].forEach(function (n) { btn.addEventListener(n, cancel); });
+        btn.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+      }
       fab.bubbles[id] = { btn: btn, lbl: lbl };
       layer.append(btn);
     });
@@ -869,7 +881,7 @@
       b.btn.tabIndex = on ? 0 : -1;
       b.btn.setAttribute("aria-hidden", on ? "false" : "true");
     });
-    fab.parts.q.textContent = l ? QUESTION[l] : "";
+    fab.parts.q.replaceChildren(l ? QUESTION[l] : "", l && l !== "plus" && !lsGet("gloups.lpUsed") ? h("span", { class: "fab-hint", text: "Appui long sur une bulle : noter après coup" }) : "");
     if (l && twinMode()) fab.parts.who.replaceChildren(forPicker(function () { if (fab.level) fabLevel(fab.level); })); else if (!l) fab.parts.who.replaceChildren();
     fab.el.classList.toggle("has-who", !!l && twinMode());
     fab.el.classList.toggle("open", !!l);
@@ -913,11 +925,42 @@
       if (ev.type === "sleep" && !(SND.id && SND.linked === ev.id)) acts.append(h("button", { class: "swap", "aria-label": "Lancer un son", onclick: function () { sheetSleep(); } }, icon("music", 18), h("span", { text: "Son" })));
       acts.append(h("button", { class: "stop", onclick: function () { stopWithToast(ev); }, text: ev.type === "sleep" ? "Réveil" : "Terminer" }));
     }
-    return h("div", { class: "pill", "data-id": ev.id },
-      h("span", { class: "breath", "aria-hidden": "true" }),
-      h("div", { class: "txt" }, h("span", { class: "t", text: label(ev) + " · depuis " + hhmm(ev.started_at) }),
-        h("span", { class: "time", "data-start": ev.started_at, text: clock((Date.now() - new Date(ev.started_at)) / 1000) })),
-      acts);
+    var tEl = h("span", { class: "t", text: label(ev) + " · depuis " + hhmm(ev.started_at) });
+    var tm = h("span", { class: "time", "data-start": ev.started_at, text: clock((Date.now() - new Date(ev.started_at)) / 1000) });
+    var txt = h("div", { class: "txt" }, tEl, tm);
+    var el = h("div", { class: "pill", "data-id": ev.id }, h("span", { class: "breath", "aria-hidden": "true" }), txt, acts);
+    // Lancé trop tard (ou trop tôt) : glisser la pastille décale le début, minute par minute
+    if (canWrite) {
+      var px = null, shift = 0, s0 = new Date(ev.started_at).getTime();
+      var floor = S.events.filter(function (e) { return e.type === ev.type && e.id !== ev.id && e.ended_at && new Date(e.ended_at).getTime() <= s0; })
+        .reduce(function (m, e) { return Math.max(m, new Date(e.ended_at).getTime()); }, s0 - 6 * 3600000);
+      var lim = function (m) { return Math.max(Math.round((floor - s0) / 60000), Math.min(m, Math.floor((Date.now() - s0) / 60000) - 1)); };
+      txt.addEventListener("pointerdown", function (e) { px = e.clientX; shift = 0; el.classList.add("drag"); try { txt.setPointerCapture(e.pointerId); } catch (x) { /* rien */ } });
+      txt.addEventListener("pointermove", function (e) {
+        if (px == null) return;
+        var dx = e.clientX - px; shift = lim(Math.round(dx / 3));
+        el.style.transform = "translateX(" + (dx * 0.3) + "px)";
+        var st = s0 + shift * 60000;
+        tEl.textContent = (ev.type === "sleep" ? "Endormi à " : "Début à ") + hhmm(new Date(st)) + (shift ? " · " + (shift < 0 ? "−" : "+") + Math.abs(shift) + NB + "min" : "");
+        tm.dataset.start = new Date(st).toISOString(); tm.textContent = clock((Date.now() - st) / 1000);
+      });
+      var done = async function () {
+        if (px == null) return;
+        px = null; el.classList.remove("drag"); el.style.transform = "";
+        if (!shift) return;
+        var iso = new Date(s0 + shift * 60000).toISOString(), old = ev.started_at;
+        var q = sb.from("events").update({ started_at: iso });
+        var r = ev.data && ev.data.twin_group ? await q.eq("family_id", S.family.id).eq("data->>twin_group", ev.data.twin_group).is("ended_at", null).select()
+          : await q.eq("id", ev.id).select();
+        if (r.error) { toast(errMsg(r.error), { error: true }); route(); return; }
+        (r.data || []).forEach(replaceEvent); route();
+        toast((ev.type === "sleep" ? "Endormi à " : "Début à ") + hhmm(new Date(iso)), { action: { label: "Annuler", fn: async function () {
+          var r2 = await sb.from("events").update({ started_at: old }).eq("id", ev.id).select(); if (!r2.error) { (r2.data || []).forEach(replaceEvent); route(); }
+        } } });
+      };
+      txt.addEventListener("pointerup", done); txt.addEventListener("pointercancel", done);
+    }
+    return el;
   }
 
   function childSwitcher() {
@@ -1039,7 +1082,7 @@
       body.replaceChildren(seg, list,
         h("div", { class: "field" }, h("span", { text: "S'arrête après" }), tseg),
         h("span", { class: "small muted", text: "Le volume baisse doucement la dernière minute." }), vol,
-        SND.id ? h("button", { class: "btn ghost full", onclick: function () { sndStop(); draw(); }, text: "Arrêter le son" }) : null,
+        SND.id ? h("button", { class: "btn ghost full", onclick: function () { sndStop(); draw(); }, text: "Arrêter le son" }) : "",
         h("span", { class: "small muted", text: "Berceuses créées pour Gloups sur des airs libres de droits." }));
     }
     draw();
@@ -1208,8 +1251,17 @@
         h("button", { class: "btn primary full", onclick: function () { closeSheet(); stopEvent(cur); }, text: "Il se réveille" })));
       return;
     }
-    var start = h("input", { class: "input", type: "time", value: hhmm(new Date(Date.now() - 3600000)) });
-    var end = h("input", { class: "input", type: "time", value: hhmm(new Date()) });
+    // Après coup : l'arc, sans saisir d'heure
+    var pastBtn = h("button", { class: "btn full" });
+    var past = arcDial("sleep", { start: Date.now() - 95 * 60000, end: Date.now() - 15 * 60000, onChange: function (v) {
+      pastBtn.disabled = v.busy;
+      pastBtn.textContent = v.live ? "Il dort encore, lancer le minuteur" : "Enregistrer, " + hhmm(v.start) + " à " + hhmm(v.end);
+    } });
+    pastBtn.onclick = function () {
+      var v = past.get(); if (v.busy) return;
+      var d = {}; if (place.value()) d.place = place.value();
+      if (v.live) logEvent("sleep", d, { running: true, started: v.start }); else logEvent("sleep", d, { started: v.start, ended: v.end });
+    };
     // Pour l'endormir : un son lancé en même temps que la sieste, retenu pour la prochaine fois
     var pickS = lsGet("gloups.sndSleep") || "none", pickT = sndMinutes();
     var sndBox = h("div", { class: "stack", vars: { gap: "8px" } });
@@ -1230,21 +1282,141 @@
       sndBox.replaceChildren(
         h("div", { class: "row between" }, h("span", { class: "small muted", vars: { "font-weight": "700" }, text: "Pour l'endormir" }), h("button", { class: "linkbtn", onclick: function () { sheetSounds(); }, text: "Tous les sons" })),
         chips,
-        pickS !== "none" ? h("div", { class: "field" }, h("span", { text: "S'arrête après" }), tseg) : null);
+        pickS !== "none" ? h("div", { class: "field" }, h("span", { text: "S'arrête après" }), tseg) : "");
       go.textContent = pickS === "none" ? "Il s'endort maintenant" : "Il s'endort, lancer " + sndInfo(pickS).name.toLowerCase();
     }
     drawSnd();
     openSheet("Sommeil", h("div", { class: "stack" }, entryPicker(),
       place.el, sndBox,
       go,
-      h("div", { class: "card" }, h("b", { text: "Ou noter un sommeil passé" }),
-        h("div", { class: "big2" }, h("label", { class: "field" }, h("span", { text: "Endormi à" }), start), h("label", { class: "field" }, h("span", { text: "Réveillé à" }), end)),
-        h("button", { class: "btn full", onclick: function () {
-          var a = timeToday(start.value), b = timeToday(end.value);
-          if (a > b) a = new Date(a.getTime() - 86400000);
-          var d = {}; if (place.value()) d.place = place.value();
-          logEvent("sleep", d, { started: a, ended: b });
-        }, text: "Enregistrer ce sommeil" }))));
+      h("div", { class: "card stack" }, h("b", { text: "Ou noter après coup" }), past.el, pastBtn)));
+  }
+  /* ---------- Noter après coup : l'arc en demi-cercle ----------
+     La journée se pose sous le pouce : début à gauche, maintenant à droite. Deux poignées (début, fin)
+     ou une seule (couche). Fin collée à « maintenant » = encore en cours. Pas de 5 min. */
+  var ARC_K = { sleep: { c: "#4A4190", bg: "#CFC8EC" }, cry: { c: "#B04A3A", bg: "#EBC9C0" }, "feed.breast": { c: "#A8661A", bg: "#EBD3B4" }, diaper: { c: "#2B7262", bg: "#BFDCD3" } };
+  function arcDial(type, o) {
+    var M = 60000, STEP = 5 * M, now = Math.floor(Date.now() / STEP) * STEP;
+    var point = !!o.point, span = 8 * 60 * M, start = o.start, end = point ? null : o.end, drag = null, edgeT = null, lastH = null;
+    var K = ARC_K[type] || ARC_K.sleep, cx = 180, cy = 206, R = 146;
+    var same = S.events.filter(function (e) { return e.type === type && !e.deleted_at && (!o.skip || e.id !== o.skip); });
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "-18 0 396 248");
+    var rt = h("div", { class: "t" }), rd = h("div", { class: "d", vars: { color: K.c } });
+    var el = h("div", { class: "arc" }, svg, h("div", { class: "arc-read" }, rt, rd));
+    function ws() { return now - span; }
+    function ang(t) { return Math.PI * (1 - (t - ws()) / span); }
+    function pt(a, r) { return [cx + r * Math.cos(a), cy - r * Math.sin(a)]; }
+    function arcP(t1, t2, r) { var a = pt(ang(t1), r), b = pt(ang(t2), r); return "M" + a[0].toFixed(1) + " " + a[1].toFixed(1) + "A" + r + " " + r + " 0 0 1 " + b[0].toFixed(1) + " " + b[1].toFixed(1); }
+    function busy() {
+      if (point) return false;
+      return same.some(function (e) { var a = new Date(e.started_at).getTime(), b = e.ended_at ? new Date(e.ended_at).getTime() : Date.now(); return start < b && end > a; });
+    }
+    function draw() {
+      var live = !point && end >= now;
+      var s = '<path d="' + arcP(ws(), now, R) + '" stroke="#EFE8DA" stroke-width="38" fill="none" stroke-linecap="round"/>';
+      var hStep = span > 12 * 60 * M ? 3 : span > 8 * 60 * M ? 2 : 1;
+      for (var t = Math.ceil(ws() / 3600000) * 3600000; t <= now; t += 3600000) {
+        var a = ang(t), p1 = pt(a, R + 21), p2 = pt(a, R + 26), l = pt(a, R + 38), hr = new Date(t).getHours();
+        s += '<line x1="' + p1[0] + '" y1="' + p1[1] + '" x2="' + p2[0] + '" y2="' + p2[1] + '" stroke="#C9C0AE" stroke-width="2" stroke-linecap="round"/>';
+        if (hr % hStep === 0) s += '<text x="' + l[0] + '" y="' + (l[1] + 4) + '" text-anchor="middle" font-size="12" font-weight="700" fill="#5B655D">' + hr + ' h</text>';
+      }
+      same.forEach(function (e) {
+        var a = new Date(e.started_at).getTime(), b = e.ended_at ? new Date(e.ended_at).getTime() : Date.now();
+        if (b > ws() && !point) s += '<path d="' + arcP(Math.max(a, ws()), Math.min(b, now), R) + '" stroke="' + K.bg + '" stroke-width="38" fill="none"/>';
+      });
+      S.events.forEach(function (e) {
+        var t2 = new Date(e.started_at).getTime(); if (t2 <= ws() || t2 > now || e.type === type) return;
+        var p = pt(ang(t2), R - 30), c = CAT[e.type];
+        if (c === "repas") s += '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="5" fill="' + CAT_COLOR.repas + '"/>';
+        else if (c === "couche") s += '<rect x="' + (p[0] - 4.5) + '" y="' + (p[1] - 4.5) + '" width="9" height="9" rx="2.5" fill="' + CAT_COLOR.couche + '"/>';
+        else if (c === "sommeil") s += '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="4" fill="none" stroke="' + CAT_COLOR.sommeil + '" stroke-width="2"/>';
+      });
+      if (!point) s += '<path d="' + arcP(start, end, R) + '" stroke="' + (busy() ? "#B0423A" : K.c) + '" stroke-width="38" fill="none" stroke-linecap="round"/>';
+      var hs = point ? [["start", start]] : [["start", start], ["end", end]];
+      hs.forEach(function (x) {
+        var p = pt(ang(x[1]), R), on = drag === x[0], c = x[0] === "start" ? K.c : "#A8661A";
+        var ic = type !== "sleep" ? '<circle r="5" fill="' + c + '"/>' : x[0] === "start" ? '<path d="M4 -6a7 7 0 1 0 6 10a6 6 0 0 1 -6 -10z" fill="' + c + '"/>'
+          : '<path d="M0 -4a4 4 0 1 1 0 8a4 4 0 1 1 0 -8M0 -9v2M0 7v2M-9 0h2M7 0h2M-6.4 -6.4l1.4 1.4M5 5l1.4 1.4M-6.4 6.4l1.4 -1.4M5 -5l1.4 -1.4" fill="none" stroke="' + c + '" stroke-width="2" stroke-linecap="round"/>';
+        s += '<g transform="translate(' + p[0].toFixed(1) + " " + p[1].toFixed(1) + ')"><circle r="' + (on ? 25 : 22) + '" fill="#FFFDF8" stroke="' + c + '" stroke-width="3" style="filter:drop-shadow(0 3px 6px rgba(30,42,36,.25))"/>' + ic + "</g>";
+      });
+      s += '<text x="376" y="' + (cy + 38) + '" text-anchor="end" font-size="12" font-weight="700" fill="' + (live ? K.c : "#5B655D") + '">maintenant</text>';
+      svg.innerHTML = s;
+      if (point) { rt.textContent = hhmm(new Date(start)); rd.textContent = "il y a " + dur((now - start) / M); }
+      else {
+        rt.textContent = hhmm(new Date(start)) + " → " + (live ? "…" : hhmm(new Date(end)));
+        rd.textContent = busy() ? "Chevauche une saisie déjà notée" : live ? "encore en cours, depuis " + dur((now - start) / M) : dur((end - start) / M);
+      }
+      svg.setAttribute("aria-label", rt.textContent);
+      if (o.onChange) o.onChange(api.get());
+    }
+    function toTime(e) {
+      var b = svg.getBoundingClientRect(), k = 396 / b.width, x = (e.clientX - b.left) * k - 18, y = (e.clientY - b.top) * k;
+      var a = Math.atan2(cy - y, x - cx); if (a < 0) a = x < cx ? Math.PI : 0;
+      return { t: Math.round((ws() + (1 - a / Math.PI) * span) / STEP) * STEP, a: a };
+    }
+    function stopEdge() { clearInterval(edgeT); edgeT = null; }
+    function move(e) {
+      if (!drag) return;
+      var r = toTime(e);
+      if (drag === "start") {
+        start = Math.max(ws(), Math.min(r.t, point ? now : end - 10 * M));
+        if (r.a > Math.PI - 0.07 && span < 24 * 60 * M) {
+          if (!edgeT) edgeT = setInterval(function () { if (span < 24 * 60 * M) { span += 2 * 60 * M; start = ws(); draw(); } }, 550);
+        } else stopEdge();
+      } else { end = Math.min(now, Math.max(r.t, start + 10 * M)); if (now - end <= STEP) end = now; }
+      var hh = Math.floor((drag === "start" ? start : end) / 3600000);
+      if (hh !== lastH) { lastH = hh; if (navigator.vibrate) try { navigator.vibrate(6); } catch (x) { /* rien */ } }
+      draw();
+    }
+    svg.addEventListener("pointerdown", function (e) {
+      var r = toTime(e); drag = point || Math.abs(r.t - start) <= Math.abs(r.t - end) ? "start" : "end";
+      try { svg.setPointerCapture(e.pointerId); } catch (x) { /* rien */ }
+      move(e);
+    });
+    svg.addEventListener("pointermove", move);
+    var up = function () { drag = null; stopEdge(); draw(); };
+    svg.addEventListener("pointerup", up); svg.addEventListener("pointercancel", up);
+    // Le geste reste dans l'arc : ni fermeture de la feuille, ni défilement
+    ["touchstart", "touchmove"].forEach(function (n) { svg.addEventListener(n, function (e) { e.stopPropagation(); }, { passive: true }); });
+    // Position de départ libre : on recule avant ce qui est déjà noté
+    for (var i = 0; i < 6 && busy(); i++) {
+      var hit = same.map(function (e) { return new Date(e.started_at).getTime(); }).filter(function (a) { return a < end; }).sort(function (a, b) { return b - a; })[0];
+      if (hit == null) break;
+      var len = end - start; end = Math.floor(hit / STEP) * STEP - STEP; start = end - len;
+      if (start < ws()) { start = ws(); if (end <= start + 10 * M) break; }
+    }
+    var api = { el: el, get: function () { return { start: new Date(start), end: point || end >= now ? null : new Date(end), live: !point && end >= now, busy: busy() }; } };
+    draw();
+    return api;
+  }
+  // Feuille « après coup » ouverte par un appui long sur une bulle du +
+  var AFTER = {
+    sommeil: { t: "Sommeil, après coup", type: "sleep", data: {} }, pleurs: { t: "Pleurs, après coup", type: "cry", data: {} },
+    g: { t: "Sein gauche, après coup", type: "feed.breast", data: { side: "left" }, len: 15 }, d: { t: "Sein droit, après coup", type: "feed.breast", data: { side: "right" }, len: 15 },
+    pipi: { t: "Pipi, après coup", type: "diaper", point: true, data: { pee: true, poo: false } },
+    selles: { t: "Selles, après coup", type: "diaper", point: true, poo: false }, deux: { t: "Pipi et selles, après coup", type: "diaper", point: true, poo: true }
+  };
+  function sheetAfter(id) {
+    var a = AFTER[id], M = 60000, now = Date.now();
+    var save = h("button", { class: "btn primary full" });
+    var dial = arcDial(a.type, { point: a.point, start: now - (a.point ? 40 : a.len ? 40 : 95) * M, end: now - (a.len ? 25 : 15) * M, onChange: function (v) {
+      save.disabled = v.busy;
+      save.textContent = a.point ? "Noter à " + hhmm(v.start) : v.live ? "Encore en cours, lancer le minuteur" : "Enregistrer, " + hhmm(v.start) + " à " + hhmm(v.end);
+    } });
+    save.onclick = function () {
+      var v = dial.get(); if (v.busy) return;
+      if (id === "selles" || id === "deux") { sheetPoo(a.poo, v.start); return; }
+      if (a.point) logEvent(a.type, a.data, { started: v.start });
+      else if (v.live) logEvent(a.type, a.data, { running: true, started: v.start });
+      else logEvent(a.type, a.data, { started: v.start, ended: v.end });
+    };
+    dial.get(); save.textContent = save.textContent || "Enregistrer";
+    openSheet(a.t, h("div", { class: "stack" }, entryPicker(), dial.el,
+      h("p", { class: "small muted arc-hint", text: a.point ? "Glissez le point à l'heure du change." : "Glissez le début et la fin. Fin sur « maintenant » : encore en cours. Tenez le début au bord gauche pour remonter plus loin." }),
+      save));
+    var v0 = dial.get(); save.disabled = v0.busy;
+    save.textContent = a.point ? "Noter à " + hhmm(v0.start) : v0.live ? "Encore en cours, lancer le minuteur" : "Enregistrer, " + hhmm(v0.start) + " à " + hhmm(v0.end);
   }
   function timeToday(v) { var p = v.split(":"), d = new Date(); d.setHours(+p[0], +p[1], 0, 0); if (d > new Date()) d = new Date(d.getTime() - 86400000); return d; }
 
