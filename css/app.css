@@ -800,3 +800,31 @@ html.tour-open .fab, html.tour-open .dock-wrap { pointer-events: none; }
 @keyframes tourDrag { 0%,25% { stroke-dashoffset: 200 } 75%,100% { stroke-dashoffset: 60 } }
 @keyframes tourConf { 0% { opacity: 0; transform: scale(.3) } 30% { opacity: 1 } 100% { opacity: 0; transform: scale(1.6) } }
 @media (prefers-reduced-motion: reduce) { .tour *, .tour { animation-duration: 0s !important; animation-iteration-count: 1 !important; transition: none !important; } }
+
+/* ---------- Tableau de bord détaillé (v0.11.0) ---------- */
+.adm-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.adm-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.adm-chips button, .adm-chips span { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 7px 12px; font: inherit; font-size: 13px; color: var(--ink); }
+.adm-chips button[aria-pressed="true"] { background: var(--green); border-color: var(--green); color: #F7F2E8; font-weight: 600; }
+.adm-chips.feats span { font-size: 12.5px; font-weight: 600; color: var(--muted); background: var(--soft); border-color: transparent; }
+.adm-chips.feats span.on { color: var(--ok); background: var(--ok-bg); }
+.adm-person { display: flex; gap: 12px; align-items: flex-start; width: 100%; text-align: left; background: var(--card); border: 0; border-radius: 18px; padding: 12px 14px; font: inherit; color: var(--ink); }
+.adm-person:active { transform: scale(.99); }
+.adm-av { width: 40px; height: 40px; border-radius: 50%; flex: none; background: var(--green); color: #F7F2E8; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.adm-av.l { width: 52px; height: 52px; font-size: 18px; }
+.adm-pt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.adm-st { font-size: 12px; font-weight: 700; white-space: nowrap; }
+.adm-mini { display: flex; gap: 2px; align-items: flex-end; height: 18px; margin-top: 4px; }
+.adm-mini i { width: 6px; border-radius: 2px; }
+.adm-funnel { display: flex; flex-direction: column; gap: 6px; }
+.adm-funnel > div { position: relative; border-radius: 10px; background: var(--soft); overflow: hidden; font-size: 13px; }
+.adm-funnel .f { position: absolute; left: 0; top: 0; bottom: 0; background: #CFE5DB; }
+.adm-funnel .row { position: relative; padding: 8px 12px; }
+.adm-hours { display: flex; align-items: flex-end; gap: 3px; height: 64px; }
+.adm-hours i { flex: 1; border-radius: 3px 3px 0 0; background: #2B7262; }
+.adm-fact { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.adm-fact:last-child { border-bottom: 0; }
+.adm-fact b { text-align: right; }
+.adm-cal { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 5px; }
+.adm-cal i { aspect-ratio: 1; border-radius: 5px; }
+.hbar.w { grid-template-columns: 136px 1fr auto; }
