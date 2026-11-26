@@ -2319,7 +2319,7 @@
         S.members.length < 2 ? h("span", { class: "small muted", text: "Vous êtes seul pour l'instant. Invitez l'autre parent ci-dessous : son avatar apparaîtra en haut de l'écran Aujourd'hui, avec un point vert quand il a Gloups ouvert." }) : null),
       isParent ? h("section", { class: "card green" }, h("b", { class: "title-m", text: "Inviter quelqu'un" }), invite) : null,
       agendaSection(),
-      S.isAdmin ? h("a", { href: "#/admin", class: "card", vars: { "text-decoration": "none", color: "inherit" } }, h("b", { class: "title-m", text: "Tableau de bord" }), h("span", { class: "small muted", text: "Chiffres globaux de Gloups, sans accès aux données des familles." })) : null,
+      S.isAdmin ? h("a", { href: "#/admin", class: "card", vars: { "text-decoration": "none", color: "inherit" } }, h("b", { class: "title-m", text: "Tableau de bord" }), h("span", { class: "small muted", text: "Inscrits, cibles et usage de Gloups, sans le contenu des carnets." })) : null,
       h("section", { class: "card" }, h("b", { class: "title-m", text: "Cet appareil" }),
         h("a", { href: "#/installer", class: "btn full", text: isStandalone() ? "App installée ✓" : "Installer sur l'écran d'accueil" }),
         h("button", { class: "btn full", onclick: function () { location.hash = "#/"; setTimeout(function () { startTour(true); }, 700); }, text: "Revoir la visite guidée" }),
@@ -2341,14 +2341,14 @@
     if (/Android/.test(ua)) return "android";
     return "desktop";
   }
-  // Ouverture de l'app : sert uniquement au comptage global (une fois par ouverture, au plus toutes les 30 min)
+  // Ouverture de l'app : jour, appareil, app installée (une fois par ouverture, au plus toutes les 30 min)
   var lastPing = 0;
   function ping() {
     lastPing = Date.now();
     var ua = navigator.userAgent, plat = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1) ? "ios" : /Android/.test(ua) ? "android" : "ordinateur";
     sb.rpc("api_v1_ping", { p_platform: plat, p_standalone: isStandalone(), p_version: (window.GLOUPS_CONFIG && GLOUPS_CONFIG.version) || "" }).then(function () {}, function () {});
   }
-  // Compteurs d'usage anonymes (écrans vus, boutons utilisés) : aucun identifiant, aucun contenu
+  // Compteurs d'usage (écrans vus, boutons utilisés) : jamais de contenu ; détail par compte pour les comptes créés depuis la v0.11
   var USE = {};
   function track(kind, name) { var k = kind + ":" + name; USE[k] = (USE[k] || 0) + 1; }
   function flushUsage() {
@@ -2358,23 +2358,176 @@
   }
   setInterval(flushUsage, 60000);
 
-  /* ---------- Écran : tableau de bord administrateur (chiffres agrégés) ---------- */
-  var ADM = { data: null, at: 0, loading: false, err: null };
+  /* ---------- Écran : tableau de bord administrateur (v0.11.0 : inscrits, cibles, usage, global) ---------- */
+  var ADM = { data: null, people: null, at: 0, loading: false, err: null, tab: "inscrits", filter: "tous" };
   var TYPE_NAME = { "feed.breast": "Tétées", "feed.bottle": "Biberons", "feed.pump": "Tire-lait", sleep: "Sommeils", diaper: "Couches", cry: "Pleurs", bath: "Bains", note: "Notes" };
+  var SRC_NAME = { ig: "Instagram", instagram: "Instagram", flyer: "Flyer", qr: "QR code", sms: "SMS", fb: "Facebook", invitation: "Invitation" };
+  var STAGE_NAME = { a_naitre: "à naître", m0_1: "0 à 1 mois", m1_3: "1 à 3 mois", m3_6: "3 à 6 mois", m6_plus: "6 mois et plus" };
+  var ROLE_NAME = { parent: "Parent", proche: "Proche", lecture: "Lecture seule" };
+  var FEATS = [
+    ["Bouton + et minuteur", function (f) { return f.some(function (x) { return /^(fab|log):/.test(x) && !/^fab:apres_/.test(x); }); }],
+    ["Noter après coup", function (f) { return f.some(function (x) { return /^fab:apres_/.test(x); }); }],
+    ["Tendances", function (f) { return f.indexOf("screen:tendances") >= 0; }],
+    ["Journal semaine ou mois", function (f) { return f.indexOf("screen:journal_semaine") >= 0 || f.indexOf("screen:journal_mois") >= 0; }],
+    ["Sons et berceuses", function (f) { return f.some(function (x) { return /^action:son_/.test(x); }); }],
+    ["Visite guidée finie", function (f) { return f.indexOf("action:visite_terminee") >= 0; }],
+    ["Saisie pour tous (jumeaux)", function (f) { return f.indexOf("action:pour_tous") >= 0; }],
+    ["Invitation envoyée", function (f, p) { return p.invitations > 0; }]
+  ];
   async function loadAdmin() {
     ADM.loading = true; ADM.err = null;
-    var r = await sb.rpc("api_admin_stats");
+    var rs = await Promise.all([sb.rpc("api_admin_stats"), sb.rpc("api_admin_people")]);
     ADM.loading = false;
-    if (r.error) ADM.err = errMsg(r.error); else { ADM.data = r.data; ADM.at = Date.now(); }
+    if (rs[0].error || rs[1].error) ADM.err = errMsg(rs[0].error || rs[1].error);
+    else { ADM.data = rs[0].data; ADM.people = rs[1].data; ADM.at = Date.now(); }
     if (location.hash === "#/admin") screenAdmin();
   }
+  function personName(p) { return (p.first_name || "Sans prénom") + (p.initial ? " " + p.initial + "." : ""); }
+  function personStatus(p) {
+    var since = p.last_at ? (Date.now() - new Date(p.last_at)) / 864e5 : null;
+    if ((Date.now() - new Date(p.created_at)) / 864e5 < 3) return { k: "nouveaux", t: "Nouveau", c: "#4A4190" };
+    if (since == null || since >= 7) return { k: "relancer", t: "À relancer", c: "#A3341F" };
+    if (since >= 3) return { k: "ralentit", t: "Ralentit", c: "#8A5212" };
+    return { k: "actifs", t: "Actif", c: "#1F5C4F" };
+  }
+  function ago(d) {
+    if (!d) return "jamais ouvert";
+    var m = Math.round((Date.now() - new Date(d)) / 60000);
+    if (m < 60) return "il y a " + Math.max(1, m) + " min";
+    if (m < 1440) return "il y a " + Math.round(m / 60) + " h";
+    var j = Math.round(m / 1440); return j === 1 ? "hier" : "il y a " + j + " j";
+  }
+  function dShort(d) { return d ? new Date(d).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) : "-"; }
+  function srcName(p) { return p.source ? (SRC_NAME[p.source] || p.source) : "source inconnue"; }
+  function devName(p) { return ({ ios: "iPhone", android: "Android", ordinateur: "ordinateur" })[p.platform] || "appareil inconnu"; }
+  function hbarRows(rows, color) {
+    var mx = Math.max(1, Math.max.apply(null, rows.map(function (r) { return r[1]; })));
+    return rows.map(function (r) {
+      return h("div", { class: "hbar w" }, h("span", { class: "l", text: r[0] }), h("span", { class: "t" }, h("span", { vars: { width: (r[1] / mx * 100) + "%", background: r[2] || color } })), h("b", { text: String(r[1]) }));
+    });
+  }
+  function tally(list, fn) { var o = {}; list.forEach(function (p) { var k = fn(p); if (k != null) o[k] = (o[k] || 0) + 1; }); return o; }
+  function adminPeople(P) {
+    var count = function (k) { return k === "tous" ? P.length : P.filter(function (p) { return personStatus(p).k === k; }).length; };
+    var chips = h("div", { class: "adm-chips" }, [["tous", "Tous"], ["actifs", "Actifs"], ["ralentit", "Ralentissent"], ["relancer", "À relancer"], ["nouveaux", "Nouveaux"]].map(function (c) {
+      return h("button", { type: "button", "aria-pressed": ADM.filter === c[0] ? "true" : "false", onclick: function () { ADM.filter = c[0]; screenAdmin(); }, text: c[1] + " · " + count(c[0]) });
+    }));
+    var list = P.filter(function (p) { return ADM.filter === "tous" || personStatus(p).k === ADM.filter; });
+    return [chips].concat(list.length ? list.map(function (p) {
+      var st = personStatus(p), mx = Math.max(1, Math.max.apply(null, p.opens14 || [0]));
+      var role = p.role ? ROLE_NAME[p.role] + (p.founder ? " · a créé la famille" : p.invited_by ? " · invité par " + p.invited_by : "") : "Sans famille";
+      var meta = "Inscrit le " + dShort(p.created_at) + " · " + srcName(p) + " · " + devName(p) + (p.installed ? ", installée" : "") + (p.stage ? " · bébé " + STAGE_NAME[p.stage] : "");
+      return h("button", { type: "button", class: "adm-person", onclick: function () { sheetPerson(p); } },
+        h("span", { class: "adm-av", text: ((p.first_name || "?")[0] + (p.initial || "")).toUpperCase() }),
+        h("span", { class: "adm-pt" },
+          h("span", { class: "row between" }, h("b", { text: personName(p) + (p.me ? " (vous)" : "") }), h("span", { class: "adm-st", vars: { color: st.c }, text: st.t })),
+          h("span", { class: "small", text: role }),
+          h("span", { class: "small muted", text: meta }),
+          h("span", { class: "row between" },
+            h("span", { class: "adm-mini", "aria-hidden": "true" }, (p.opens14 || []).map(function (v) { return h("i", { vars: { height: (v ? 4 + v / mx * 14 : 2) + "px", background: v ? "#2B7262" : "var(--line)" } }); })),
+            h("span", { class: "small muted", text: ago(p.last_at) }))));
+    }) : [h("p", { class: "small muted", text: "Personne dans ce filtre." })]);
+  }
+  function adminTargets(P) {
+    var card = function (t, s) { return h("section", { class: "card" }, h("div", null, h("b", { text: t }), h("div", { class: "small muted", text: s })), Array.prototype.slice.call(arguments, 2)); };
+    var src = tally(P, function (p) { return p.source ? srcName(p) : "Inconnue"; });
+    var who = tally(P, function (p) { return !p.role ? "Sans famille" : p.role === "parent" ? (p.founder ? "Parent fondateur" : "Parent invité") : ROLE_NAME[p.role]; });
+    var fams = {}; P.forEach(function (p) { if (p.family_no && p.stage) fams[p.family_no] = p.stage; });
+    var stage = tally(Object.keys(fams), function (k) { return STAGE_NAME[fams[k]]; });
+    var dev = tally(P.filter(function (p) { return p.platform; }), function (p) { return ({ ios: "iPhone", android: "Android", ordinateur: "Ordinateur" })[p.platform]; });
+    var rows = function (o) { return Object.keys(o).sort(function (a, b) { return o[b] - o[a]; }).map(function (k) { return [k, o[k]]; }); };
+    var n = P.length, fam = P.filter(function (p) { return p.role; }).length, first = P.filter(function (p) { return p.events_total > 0; }).length,
+      act3 = P.filter(function (p) { return p.days30 >= 3; }).length, inst = P.filter(function (p) { return p.installed; }).length;
+    var funnel = [["Inscrits", n], ["Famille créée ou rejointe", fam], ["Première saisie", first], ["Actifs 3 jours ou plus", act3], ["App installée", inst]];
+    return [
+      card("D'où viennent-ils", "Source à l'inscription", hbarRows(rows(src), "#E9A35B"),
+        h("span", { class: "small muted", text: "Liens à utiliser : gloups.info/?src=ig (Instagram), ?src=flyer, ?src=sms. Suivi des sources pour les comptes créés depuis la v0.11." })),
+      card("Qui sont-ils", "Rôle dans la famille", hbarRows(rows(who), "#2B7262")),
+      card("Âge du bébé", "À la création de la famille", hbarRows(rows(stage), "#8E84D6")),
+      card("Appareil", "Dernière ouverture · " + inst + " app installée" + (inst > 1 ? "s" : ""), hbarRows(rows(dev), "#5B655D")),
+      card("Du lien à l'usage", "Où les inscrits décrochent", h("div", { class: "adm-funnel" }, funnel.map(function (f) {
+        return h("div", null, h("span", { class: "f", vars: { width: (n ? f[1] / n * 100 : 0) + "%" } }), h("span", { class: "row between" }, h("span", { text: f[0] }), h("b", { text: String(f[1]) })));
+      })))
+    ];
+  }
+  function adminUsage(P, d, hours) {
+    var tracked = P.filter(function (p) { return p.tracked && p.days30 > 0; });
+    var feats = FEATS.map(function (f) { var k = tracked.filter(function (p) { return f[1](p.features || [], p); }).length; return [f[0], k]; });
+    var bt = { repas: 0, couches: 0, sommeil: 0, pleurs: 0, autres: 0 }; P.forEach(function (p) { Object.keys(bt).forEach(function (k) { bt[k] += (p.by_type || {})[k] || 0; }); });
+    var mxh = Math.max(1, Math.max.apply(null, hours || [0]));
+    return [
+      h("section", { class: "card" }, h("div", null, h("b", { text: "Fonctions utilisées" }), h("div", { class: "small muted", text: "Comptes suivis actifs sur 30 jours : " + tracked.length })),
+        tracked.length ? feats.map(function (f) {
+          var pc = Math.round(f[1] / tracked.length * 100);
+          return h("div", { class: "hbar w" }, h("span", { class: "l", text: f[0] }), h("span", { class: "t" }, h("span", { vars: { width: pc + "%", background: "#4A4190" } })), h("b", { text: pc + " %" }));
+        }) : h("span", { class: "small muted", text: "Pas encore de compte suivi : le détail par fonction concerne les comptes créés depuis la v0.11." })),
+      h("section", { class: "card" }, h("div", null, h("b", { text: "Saisies par type" }), h("div", { class: "small muted", text: "30 derniers jours, toutes familles" })),
+        hbarRows([["Repas", bt.repas, "#E9A35B"], ["Couches", bt.couches, "#5FA88F"], ["Sommeil", bt.sommeil, "#8E84D6"], ["Pleurs", bt.pleurs, "#C98585"], ["Autres", bt.autres, "#5B655D"]])),
+      h("section", { class: "card" }, h("div", null, h("b", { text: "Heures de saisie" }), h("div", { class: "small muted", text: "7 derniers jours, toutes familles" })),
+        h("div", { class: "adm-hours", "aria-hidden": "true" }, (hours || []).map(function (v) { return h("i", { vars: { height: Math.max(2, v / mxh * 64) + "px" } }); })),
+        h("div", { class: "row between small muted" }, h("span", { text: "0 h" }), h("span", { text: "6 h" }), h("span", { text: "12 h" }), h("span", { text: "18 h" }), h("span", { text: "24 h" })))
+    ];
+  }
+  function sheetPerson(p) {
+    var st = personStatus(p);
+    var fact = function (k, v) { return h("div", { class: "adm-fact" }, h("span", { class: "muted", text: k }), h("b", { text: v })); };
+    var col = ["var(--line)", "#CFE5DB", "#7FBFA8", "#2B7262"];
+    var days = p.days || [], mx = Math.max(1, Math.max.apply(null, days.concat([0])));
+    var bt = p.by_type || {}, f = p.features;
+    var steps = [["Inscription" + (p.source ? " via " + srcName(p) : ""), p.created_at], [p.founder ? "Famille créée" : "Famille rejointe", p.role ? p.joined_at : null], ["Première saisie", p.first_event_at], ["App installée", p.installed_day]].filter(function (s) { return s[1]; });
+    openSheet(personName(p), h("div", { class: "stack" },
+      h("div", { class: "row" }, h("span", { class: "adm-av l", text: ((p.first_name || "?")[0] + (p.initial || "")).toUpperCase() }),
+        h("div", { class: "grow" }, h("span", { class: "small muted", text: (p.role ? ROLE_NAME[p.role] + (p.founder ? " · a créé la famille" : "") + " · famille n° " + p.family_no : "Sans famille") })),
+        h("span", { class: "adm-st", vars: { color: st.c }, text: st.t })),
+      h("section", { class: "card" },
+        fact("Inscription", dShort(p.created_at)), fact("Source", p.source ? srcName(p) : "Inconnue"),
+        fact("Arrivée", p.founder ? "a créé la famille" : p.invited_by ? "invité par " + p.invited_by : "-"),
+        fact("Famille", p.role ? p.family_size + " membre" + (p.family_size > 1 ? "s" : "") + ", " + p.children + " enfant" + (p.children > 1 ? "s" : "") : "-"),
+        fact("Âge du bébé", p.stage ? STAGE_NAME[p.stage] : "-"),
+        fact("Appareil", devName(p) + (p.installed ? ", app installée" : "")),
+        fact("Dernière ouverture", ago(p.last_at))),
+      h("section", { class: "card" }, h("div", { class: "row between" }, h("b", { text: "Activité, 30 jours" }), h("span", { class: "small muted", text: p.days30 + " jour" + (p.days30 > 1 ? "s" : "") + " actif" + (p.days30 > 1 ? "s" : "") })),
+        h("div", { class: "adm-cal", "aria-hidden": "true" }, days.map(function (v) { return h("i", { vars: { background: col[v ? Math.min(3, 1 + Math.floor(v / mx * 2.99)) : 0] } }); })),
+        h("div", { class: "kpis" }, h("div", { class: "kpi" }, h("b", { text: String(p.opens30) }), h("span", { text: "ouvertures" })),
+          h("div", { class: "kpi" }, h("b", { text: String(p.events30) }), h("span", { text: "saisies" })),
+          h("div", { class: "kpi" }, h("b", { text: p.peak_hour != null ? p.peak_hour + " h" : "-" }), h("span", { text: "heure la plus active" })))),
+      h("section", { class: "card" }, h("b", { text: "Ses saisies, 30 jours" }),
+        hbarRows([["Repas", bt.repas || 0, "#E9A35B"], ["Couches", bt.couches || 0, "#5FA88F"], ["Sommeil", bt.sommeil || 0, "#8E84D6"], ["Pleurs", bt.pleurs || 0, "#C98585"], ["Autres", bt.autres || 0, "#5B655D"]]),
+        h("span", { class: "small muted", text: "Nombre de saisies seulement, jamais leur contenu." })),
+      h("section", { class: "card" }, h("b", { text: "Fonctions utilisées" }),
+        f ? h("div", { class: "adm-chips feats" }, FEATS.map(function (x) { var u = x[1](f, p); return h("span", { class: u ? "on" : null, text: (u ? "✓ " : "· ") + x[0] }); }))
+          : h("span", { class: "small muted", text: "Compte créé avant la v0.11 : le détail par fonction n'est pas suivi." })),
+      steps.length ? h("section", { class: "card" }, h("b", { text: "Parcours" }), steps.map(function (s) { return h("div", { class: "row between small" }, h("span", { text: s[0] }), h("span", { class: "muted", text: dShort(s[1]) })); })) : null,
+      h("p", { class: "small muted", text: "Non visibles : adresse e-mail, nom complet, prénom et date de naissance des enfants, contenu des saisies, santé." })));
+  }
   function screenAdmin() {
-    if (!ADM.data && !ADM.loading && !ADM.err || Date.now() - ADM.at > 60000 && !ADM.loading) loadAdmin();
-    var d = ADM.data, n = function (x) { return (x || 0).toLocaleString("fr-FR"); };
-    var kpi = function (v, l, sub) { return h("div", { class: "kpi" }, h("b", { text: v }), h("span", { text: l }), sub ? h("span", { class: "sub", text: sub }) : null); };
+    if ((!ADM.data && !ADM.loading && !ADM.err) || (Date.now() - ADM.at > 60000 && !ADM.loading)) loadAdmin();
+    var d = ADM.data, pp = ADM.people, P = pp ? pp.people || [] : [];
+    var tabs = h("div", { class: "seg adm-tabs", role: "tablist" }, [["inscrits", "Inscrits"], ["cibles", "Cibles"], ["usage", "Usage"], ["global", "Global"]].map(function (t) {
+      return h("button", { role: "tab", "aria-pressed": ADM.tab === t[0] ? "true" : "false", "aria-selected": ADM.tab === t[0] ? "true" : "false", onclick: function () { ADM.tab = t[0]; screenAdmin(); }, text: t[1] });
+    }));
     var body;
-    if (!d) body = h("section", { class: "card" }, h("span", { class: "muted", text: ADM.err || "Chargement…" }));
+    if (!d || !pp) body = h("section", { class: "card" }, h("span", { class: "muted", text: ADM.err || "Chargement…" }));
     else {
+      var wk = P.filter(function (p) { return Date.now() - new Date(p.created_at) < 7 * 864e5; }).length;
+      var a7 = P.filter(function (p) { return p.last_at && Date.now() - new Date(p.last_at) < 7 * 864e5; }).length;
+      var head = h("div", { class: "kpis" },
+        h("div", { class: "kpi" }, h("b", { text: String(P.length) }), h("span", { text: "inscrits" }), h("span", { class: "sub", text: "+" + wk + " en 7 j" })),
+        h("div", { class: "kpi" }, h("b", { text: String(a7) }), h("span", { text: "actifs 7 j" }), h("span", { class: "sub", text: P.length ? Math.round(a7 / P.length * 100) + " %" : "-" })),
+        h("div", { class: "kpi" }, h("b", { text: String(d.families || 0) }), h("span", { text: "familles" }), h("span", { class: "sub", text: d.families ? dec(P.filter(function (p) { return p.role; }).length / d.families) + " pers. / fam." : "-" })));
+      var content = ADM.tab === "cibles" ? adminTargets(P) : ADM.tab === "usage" ? adminUsage(P, d, pp.event_hours_7d) : ADM.tab === "global" ? adminGlobal(d) : adminPeople(P);
+      body = [head, tabs].concat(content, [h("p", { class: "small muted", text: "Jamais affichés : adresse e-mail, nom complet, prénom des enfants, contenu des saisies, données de santé. Mis à jour " + new Date(d.generated_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) + "." })]);
+    }
+    mount(h("main", { class: "screen" },
+      h("a", { href: "#/famille", class: "small", text: "‹ Famille" }),
+      h("span", { class: "eyebrow", text: "Administration" }),
+      h("div", { class: "row between" }, h("h1", { class: "title-l", text: "Tableau de bord" }), h("button", { class: "btn ghost", onclick: function () { ADM.at = 0; loadAdmin(); }, text: "Actualiser" })),
+      body));
+    appEl.append(dock("famille", S.role === "parent" || S.role === "proche"));
+  }
+  function adminGlobal(d) {
+    var n = function (x) { return (x || 0).toLocaleString("fr-FR"); };
+    var kpi = function (v, l, sub) { return h("div", { class: "kpi" }, h("b", { text: v }), h("span", { text: l }), sub ? h("span", { class: "sub", text: sub }) : null); };
       var roles = d.members_by_role || {}, daily = d.daily || [];
       var spark = function (key, color, title) {
         var max = Math.max(1, Math.max.apply(null, daily.map(function (x) { return x[key]; })));
@@ -2400,7 +2553,7 @@
       var SCREEN = { accueil: "Aujourd'hui", journal_jour: "Journal jour", journal_semaine: "Journal semaine", journal_mois: "Journal mois", tendances: "Tendances", famille: "Famille", installer: "Installation", admin: "Tableau de bord" };
       var FAB = { repas: "Repas", sommeil: "Sommeil", couche: "Couche", pleurs: "Pleurs", plus: "Plus", g: "Sein gauche", d: "Sein droit", biberon: "Biberon", tirelait: "Tire-lait", pipi: "Pipi", selles: "Selles", deux: "Pipi + selles", bain: "Bain", temp: "Température", poids: "Poids", note: "Note" };
       var fbc = {}; Object.keys(d.families_by_children || {}).forEach(function (k) { fbc[k] = d.families_by_children[k]; });
-      body = [
+      var body = [
         card("Inscrits", null, h("div", { class: "kpis" },
             kpi(n(d.families), d.families > 1 ? "familles" : "famille", n(d.families_multi_parent) + " à deux parents"),
             kpi(n(d.children), d.children > 1 ? "enfants" : "enfant", n(d.children_unborn) + " à naître"),
@@ -2439,13 +2592,7 @@
           h("div", { class: "kpis" }, kpi(n(hl.measurements), "mesures", "poids, temp., 30 j"))),
         h("p", { class: "small muted", text: "Uniquement des comptes agrégés : aucun prénom, aucune saisie, aucune donnée de santé n'est lisible ici. Mis à jour " + new Date(d.generated_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) + "." })
       ];
-    }
-    mount(h("main", { class: "screen" },
-      h("a", { href: "#/famille", class: "small", text: "‹ Famille" }),
-      h("span", { class: "eyebrow", text: "Administration" }),
-      h("div", { class: "row between" }, h("h1", { class: "title-l", text: "Tableau de bord" }), h("button", { class: "btn ghost", onclick: function () { ADM.at = 0; loadAdmin(); }, text: "Actualiser" })),
-      body));
-    appEl.append(dock("famille", S.role === "parent" || S.role === "proche"));
+    return body.slice(0, -1);
   }
 
   function screenInstall(choice) {
@@ -2799,7 +2946,8 @@
         await loadAppts();
         subscribe();
         ping();
-        sb.rpc("api_admin_is_admin").then(function (r) { var was = S.isAdmin; S.isAdmin = !r.error && r.data === true; if (S.isAdmin !== was && location.hash === "#/famille") route(); });
+        if (lsGet("gloups.src")) sb.rpc("api_v1_set_source", { p_src: lsGet("gloups.src") }).then(function (r) { if (!r.error) lsSet("gloups.src", null); }, function () {});
+        sb.rpc("api_admin_is_admin").then(function (r) { var was = S.isAdmin; S.isAdmin = !r.error && r.data === true; if (S.isAdmin !== was && (location.hash === "#/famille" || location.hash === "#/admin")) route(); });
       }
     } catch (e) {
       S.loading = false;
@@ -2825,7 +2973,11 @@
   (function () {
     var p = new URLSearchParams(location.search);
     var inv = p.get("invite");
-    if (inv && /^[A-Za-z0-9-]{7,9}$/.test(inv)) { lsSet("gloups.invite", inv.toUpperCase()); history.replaceState(null, "", location.pathname + location.hash); }
+    if (inv && /^[A-Za-z0-9-]{7,9}$/.test(inv)) lsSet("gloups.invite", inv.toUpperCase());
+    // Source du lien (?src=ig, flyer, sms...) : enregistrée une seule fois, pour les nouveaux comptes
+    var src = p.get("src");
+    if (src && /^[A-Za-z0-9_-]{1,24}$/.test(src) && !lsGet("gloups.src")) lsSet("gloups.src", src.toLowerCase());
+    if (inv || src) history.replaceState(null, "", location.pathname + location.hash);
   })();
 
   // Minuteurs : mise à jour chaque seconde, sans tout redessiner

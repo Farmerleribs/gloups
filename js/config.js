@@ -4,5 +4,5 @@
 window.GLOUPS_CONFIG = {
   supabaseUrl: "https://xdyiaitqqfetcrlhtzjw.supabase.co",
   supabaseKey: "sb_publishable_JEfldFD1fYTyCilf0YMvsQ_t3Y10ssX",
-  version: "0.10.0"
+  version: "0.11.0"
 };
