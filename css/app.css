@@ -752,3 +752,13 @@ html.fab-open #toast-root { visibility: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .wl *, .wl *::before, .wl *::after { animation-duration: 0s !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; }
 }
+/* Écrans peu hauts (iPhone SE, ordinateur) : le slogan reste visible au-dessus de la carte */
+@media (max-height: 780px) {
+  .wl-center { top: calc(36px + var(--safe-top)); }
+  .wl-hero.inv .wl-center { top: calc(24px + var(--safe-top)); }
+  .wl-baby:not(.s) svg { width: 112px; height: 112px; }
+  .wl-title { margin-top: 12px; font-size: 38px; }
+  .wl-title.s { font-size: 28px; }
+  .wl-tag { font-size: 16px; }
+  .wl-trio { margin-top: 12px; }
+}
