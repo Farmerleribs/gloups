@@ -2348,7 +2348,7 @@
     var ua = navigator.userAgent, plat = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1) ? "ios" : /Android/.test(ua) ? "android" : "ordinateur";
     sb.rpc("api_v1_ping", { p_platform: plat, p_standalone: isStandalone(), p_version: (window.GLOUPS_CONFIG && GLOUPS_CONFIG.version) || "" }).then(function () {}, function () {});
   }
-  // Compteurs d'usage (écrans vus, boutons utilisés) : jamais de contenu ; détail par compte pour les comptes créés depuis la v0.11
+  // Compteurs d'usage (écrans vus, boutons utilisés) : jamais de contenu ; détail par compte
   var USE = {};
   function track(kind, name) { var k = kind + ":" + name; USE[k] = (USE[k] || 0) + 1; }
   function flushUsage() {
@@ -2441,7 +2441,7 @@
     var funnel = [["Inscrits", n], ["Famille créée ou rejointe", fam], ["Première saisie", first], ["Actifs 3 jours ou plus", act3], ["App installée", inst]];
     return [
       card("D'où viennent-ils", "Source à l'inscription", hbarRows(rows(src), "#E9A35B"),
-        h("span", { class: "small muted", text: "Liens à utiliser : gloups.info/?src=ig (Instagram), ?src=flyer, ?src=sms. Suivi des sources pour les comptes créés depuis la v0.11." })),
+        h("span", { class: "small muted", text: "Liens à utiliser : gloups.info/?src=ig (Instagram), ?src=flyer, ?src=sms." })),
       card("Qui sont-ils", "Rôle dans la famille", hbarRows(rows(who), "#2B7262")),
       card("Âge du bébé", "À la création de la famille", hbarRows(rows(stage), "#8E84D6")),
       card("Appareil", "Dernière ouverture · " + inst + " app installée" + (inst > 1 ? "s" : ""), hbarRows(rows(dev), "#5B655D")),
@@ -2460,7 +2460,7 @@
         tracked.length ? feats.map(function (f) {
           var pc = Math.round(f[1] / tracked.length * 100);
           return h("div", { class: "hbar w" }, h("span", { class: "l", text: f[0] }), h("span", { class: "t" }, h("span", { vars: { width: pc + "%", background: "#4A4190" } })), h("b", { text: pc + " %" }));
-        }) : h("span", { class: "small muted", text: "Pas encore de compte suivi : le détail par fonction concerne les comptes créés depuis la v0.11." })),
+        }) : h("span", { class: "small muted", text: "Aucun compte actif sur 30 jours." })),
       h("section", { class: "card" }, h("div", null, h("b", { text: "Saisies par type" }), h("div", { class: "small muted", text: "30 derniers jours, toutes familles" })),
         hbarRows([["Repas", bt.repas, "#E9A35B"], ["Couches", bt.couches, "#5FA88F"], ["Sommeil", bt.sommeil, "#8E84D6"], ["Pleurs", bt.pleurs, "#C98585"], ["Autres", bt.autres, "#5B655D"]])),
       h("section", { class: "card" }, h("div", null, h("b", { text: "Heures de saisie" }), h("div", { class: "small muted", text: "7 derniers jours, toutes familles" })),
@@ -2496,7 +2496,7 @@
         h("span", { class: "small muted", text: "Nombre de saisies seulement, jamais leur contenu." })),
       h("section", { class: "card" }, h("b", { text: "Fonctions utilisées" }),
         f ? h("div", { class: "adm-chips feats" }, FEATS.map(function (x) { var u = x[1](f, p); return h("span", { class: u ? "on" : null, text: (u ? "✓ " : "· ") + x[0] }); }))
-          : h("span", { class: "small muted", text: "Compte créé avant la v0.11 : le détail par fonction n'est pas suivi." })),
+          : h("span", { class: "small muted", text: "Pas encore de données d'usage pour ce compte." })),
       steps.length ? h("section", { class: "card" }, h("b", { text: "Parcours" }), steps.map(function (s) { return h("div", { class: "row between small" }, h("span", { text: s[0] }), h("span", { class: "muted", text: dShort(s[1]) })); })) : null,
       h("p", { class: "small muted", text: "Non visibles : adresse e-mail, nom complet, prénom et date de naissance des enfants, contenu des saisies, santé." })));
   }
