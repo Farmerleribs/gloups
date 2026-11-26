@@ -77,6 +77,7 @@
     trash: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3",
     share: "M12 3v12M8 7l4-4 4 4M6 11H5v10h14V11h-1",
     plus: "M12 5v14M5 12h14",
+    check: "M5 12l5 5 9-10",
     moon: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z",
     drop: "M12 3s6 7 6 11a6 6 0 0 1-12 0c0-4 6-11 6-11z",
     bottle: "M10 2h4M10 2v3M14 2v3M8 5h8v2H8zM8 7h8l1 3v10a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V10z",
@@ -453,27 +454,209 @@
   function running() { return S.events.filter(function (e) { return !e.ended_at; }); }
   function lastOf(pred) { return S.events.find(function (e) { return pred(e) && e.ended_at; }) || S.events.find(pred) || null; }
 
-  /* ---------- Écran : connexion ---------- */
+  /* ---------- Écran : connexion (v0.9.0) ---------- */
+  var GOOGLE_CLIENT_ID = "173413659711-9o3rmks12srae5plp79usag0d496e5kf.apps.googleusercontent.com";
+  var WL = { timer: null, slide: 0, gsi: null, raw: null };
+  function sv(tag, attrs) {
+    var el = document.createElementNS(SVGNS, tag);
+    Object.keys(attrs || {}).forEach(function (k) {
+      if (k === "vars") Object.keys(attrs.vars).forEach(function (p) { el.style.setProperty(p, attrs.vars[p]); });
+      else el.setAttribute(k, attrs[k]);
+    });
+    for (var i = 2; i < arguments.length; i++) if (arguments[i]) el.appendChild(arguments[i]);
+    return el;
+  }
+  function wlStars(list) {
+    return sv.apply(null, ["svg", { class: "wl-stars", "aria-hidden": "true", viewBox: "0 0 390 460", preserveAspectRatio: "xMidYMid slice" }].concat(list.map(function (s) {
+      return sv("circle", { cx: s[0], cy: s[1], r: s[2], class: "wl-star", vars: { "--d": s[3] + "s", "--t": s[4] + "s" } });
+    })));
+  }
+  // Le bébé du logo : endormi, ou qui se réveille (yeux qui s'ouvrent, sourire)
+  function wlBaby(size, wake) {
+    var mouth = wake ? "M40 67.5q6 5.5 12 0" : "M42 69q4 2.5 8 0";
+    return sv("svg", { width: size, height: size, viewBox: "16 26 60 60", role: "img", "aria-label": "Gloups" },
+      sv("circle", { cx: 46, cy: 57, r: 26, fill: "#F4EFE4" }),
+      sv("path", { d: "M46 31c4-5 3-10-1-13", fill: "none", stroke: "#F4EFE4", "stroke-width": 3.2, "stroke-linecap": "round" }),
+      sv("path", { d: "M33 56q5 4.6 10 0M49 56q5 4.6 10 0", fill: "none", stroke: "#1F4A3A", "stroke-width": 3.4, "stroke-linecap": "round", class: wake ? "wl-shut" : null }),
+      wake ? sv("g", { class: "wl-open" },
+        sv("circle", { cx: 38, cy: 56, r: 3.4, fill: "#1F4A3A" }), sv("circle", { cx: 54, cy: 56, r: 3.4, fill: "#1F4A3A" }),
+        sv("circle", { cx: 39.2, cy: 54.8, r: 1, fill: "#F4EFE4" }), sv("circle", { cx: 55.2, cy: 54.8, r: 1, fill: "#F4EFE4" })) : null,
+      sv("circle", { cx: 32, cy: 64.5, r: 3.6, fill: "#E9B97A", class: wake ? null : "wl-cheek" }),
+      sv("circle", { cx: 60, cy: 64.5, r: 3.6, fill: "#E9B97A", class: wake ? null : "wl-cheek" }),
+      sv("path", { d: mouth, fill: "none", stroke: "#1F4A3A", "stroke-width": 2.8, "stroke-linecap": "round" }));
+  }
+  function wlMoon() {
+    return sv("svg", { class: "wl-moon", width: 60, height: 60, viewBox: "0 0 20 20", "aria-hidden": "true" },
+      sv("path", { d: "M8 0a10 10 0 1 0 8 15.5a8 8 0 1 1-8-15.5z", fill: "#E9B97A" }));
+  }
+  function wlSlide(i) {
+    var cap = function (t1, t2) { return h("div", { class: "wl-cap" }, h("b", { text: t1 }), h("span", { text: t2 })); };
+    var bub = function (ic, cls, ripple) { return h("span", { class: "wl-bub " + cls }, ripple ? h("span", { class: "wl-rip", "aria-hidden": "true" }) : null, icon(ic, 26)); };
+    if (i === 0) return h("div", { class: "wl-slide" },
+      h("div", { class: "wl-bubs" }, bub("bottle", "repas"), bub("moon", "sommeil", true), bub("diaper", "couche")),
+      h("span", { class: "wl-live" }, h("i", { "aria-hidden": "true" }), "Sieste en cours · 0:12"),
+      cap("Un tap, c'est noté", "Tétées, biberons, couches, sommeil."));
+    if (i === 1) return h("div", { class: "wl-slide" },
+      h("div", { class: "wl-duo" },
+        h("span", { class: "wl-who" }, h("span", { class: "wl-av a", text: "P" }), h("span", { text: "Papa" })),
+        h("span", { class: "wl-line", "aria-hidden": "true" }),
+        h("span", { class: "wl-fly", text: "Biberon 120 ml" }),
+        h("span", { class: "wl-who" }, h("span", { class: "wl-av b", text: "M" }), h("span", { text: "Maman" }))),
+      cap("Partagé à deux, en direct", "Chaque saisie arrive aussitôt chez l'autre."));
+    return h("div", { class: "wl-slide" },
+      h("div", { class: "wl-arcbox" },
+        sv("svg", { width: 190, height: 96, viewBox: "0 0 190 96", "aria-hidden": "true" },
+          sv("path", { d: "M15 90a80 80 0 0 1 160 0", fill: "none", stroke: "#E6E2F5", "stroke-width": 12, "stroke-linecap": "round" }),
+          sv("path", { d: "M15 90a80 80 0 0 1 160 0", fill: "none", stroke: "#4A4190", "stroke-width": 12, "stroke-linecap": "round", "stroke-dasharray": 252, class: "wl-arc" })),
+        h("span", { class: "wl-arct", text: "15" + NB + "h" + NB + "20" })),
+      cap("Sa prochaine sieste, anticipée", "D'après son propre rythme."));
+  }
+  function wlCarousel() {
+    var stage = h("div", { class: "wl-stage" });
+    var dots = h("div", { class: "wl-dots" });
+    var labels = ["Un tap, c'est noté", "Partagé à deux", "Prochaine sieste"];
+    function show(i) {
+      WL.slide = i;
+      stage.replaceChildren(wlSlide(i));
+      dots.replaceChildren.apply(dots, labels.map(function (l, k) {
+        return h("button", { type: "button", class: k === i ? "on" : null, "aria-label": "Voir : " + l, "aria-current": k === i ? "true" : null, onclick: function () { show(k); start(); } });
+      }));
+    }
+    function start() {
+      clearInterval(WL.timer);
+      WL.timer = setInterval(function () {
+        if (!stage.isConnected) { clearInterval(WL.timer); return; }
+        if (document.hidden) return;
+        show((WL.slide + 1) % 3);
+      }, 3600);
+    }
+    show(0); start();
+    return h("div", { class: "wl-card wl-in", vars: { "--d": ".5s" } }, stage, dots);
+  }
+  // Bouton officiel Google (Google Identity Services) : l'écran Google affiche gloups.info.
+  // Repli sur l'ancienne connexion par redirection si le bouton ne se charge pas, ou dans l'app installée.
+  function loadGsi() {
+    if (WL.gsi) return WL.gsi;
+    WL.gsi = new Promise(function (ok, ko) {
+      var s = document.createElement("script");
+      s.src = "https://accounts.google.com/gsi/client"; s.async = true;
+      s.onload = function () { window.google && google.accounts && google.accounts.id ? ok() : ko(new Error("gsi")); };
+      s.onerror = function () { WL.gsi = null; ko(new Error("gsi")); };
+      document.head.appendChild(s);
+      setTimeout(function () { ko(new Error("timeout")); }, 6000);
+    });
+    return WL.gsi;
+  }
+  async function sha256hex(t) {
+    var b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t));
+    return Array.from(new Uint8Array(b)).map(function (x) { return x.toString(16).padStart(2, "0"); }).join("");
+  }
+  function googleButton() {
+    var slot = h("div", { class: "wl-gslot" });
+    var fallback = h("button", { class: "btn wl-gfb full", type: "button", onclick: signIn, text: "Continuer avec Google" });
+    var help = h("button", { class: "wl-alt", type: "button", onclick: signIn, text: "Le bouton ne s'affiche pas ? Autre méthode" });
+    var box = h("div", { class: "wl-gbox" }, slot, help);
+    var useFallback = function () { box.replaceChildren(fallback); };
+    if (isStandalone() || !window.crypto || !crypto.subtle) { useFallback(); return box; }
+    help.hidden = true;
+    (async function () {
+      try {
+        WL.raw = Array.from(crypto.getRandomValues(new Uint8Array(16))).map(function (x) { return x.toString(16).padStart(2, "0"); }).join("");
+        var hashed = await sha256hex(WL.raw);
+        await loadGsi();
+        google.accounts.id.initialize({ client_id: GOOGLE_CLIENT_ID, callback: onGoogleCredential, nonce: hashed, ux_mode: "popup", itp_support: true, context: "use" });
+        var w = Math.max(240, Math.min(400, Math.round(slot.getBoundingClientRect().width || 340)));
+        google.accounts.id.renderButton(slot, { type: "standard", theme: "outline", size: "large", shape: "pill", text: "continue_with", logo_alignment: "center", locale: "fr", width: w });
+        setTimeout(function () { help.hidden = false; }, 2500);
+      } catch (e) { if (slot.isConnected) useFallback(); }
+    })();
+    return box;
+  }
+  async function onGoogleCredential(resp) {
+    var slot = document.querySelector(".wl-gbox");
+    if (slot) slot.classList.add("busy");
+    var r = await sb.auth.signInWithIdToken({ provider: "google", token: resp.credential, nonce: WL.raw });
+    if (r.error) {
+      if (slot) slot.classList.remove("busy");
+      toast(errMsg(r.error), { error: true });
+      return;
+    }
+    track("action", "connexion_google_gsi");
+  }
+  function legal(extra) {
+    return h("p", { class: "wl-legal" }, extra || "Gratuit, sans mot de passe. Données hébergées dans l'Union européenne.", h("br"),
+      h("a", { href: "confidentialite.html", text: "Confidentialité" }), " · ", h("a", { href: "conditions.html", text: "Conditions" }));
+  }
   function screenWelcome() {
     var invite = lsGet("gloups.invite");
-    var feat = function (ic, cls, t1, t2) { return h("div", { class: "wfeat" }, h("span", { class: "wico " + cls }, icon(ic, 22)), h("span", { class: "wtx" }, h("b", { text: t1 }), h("span", { text: t2 }))); };
-    mount(h("main", { class: "screen plain welcome" },
-      h("div", { class: "whero" },
-        logo(),
-        h("h1", { class: "title-xl", text: "Gloups" }),
-        h("p", { text: "Le carnet de bébé pour toute la famille." })),
-      invite ? h("div", { class: "card ok" }, h("b", { text: "Invitation reçue (" + invite + ")" }), h("span", { class: "small", text: "Connectez-vous pour rejoindre la famille." })) : null,
-      h("div", { class: "wfeats" },
-        feat("bottle", "repas", "Noter en un tap", "tétées, biberons, couches, sommeil"),
-        feat("family", "couche", "Partagé à deux", "chaque saisie arrive en direct"),
-        feat("moon", "sommeil", "Sa sieste anticipée", "d'après son propre rythme"),
-        feat("cal", "sante", "Rendez-vous et rappels", "pédiatre, PMI, vaccins")),
-      h("div", { class: "stack", vars: { "margin-top": "auto" } },
-        h("button", { class: "btn primary full", onclick: signIn, text: "Continuer avec Google" }),
-        h("p", { class: "small muted", vars: { "text-align": "center" } }, "Gratuit, sans mot de passe. Données hébergées dans l'Union européenne. ",
-          h("a", { href: "confidentialite.html", text: "Confidentialité" }), " · ", h("a", { href: "conditions.html", text: "Conditions" }))
-      )
-    ));
+    // Déjà affiché : on ne relance pas les animations
+    var cur = appEl.querySelector("main.wl");
+    if (cur && cur.getAttribute("data-k") === (invite ? "inv:" + invite : "welcome")) return;
+    clearInterval(WL.timer);
+    if (invite) { welcomeInvite(invite); return; }
+    var zz = [0, 1, 2].map(function (k) { return h("span", { class: "wl-z z" + k, "aria-hidden": "true", text: "z" }); });
+    mount(h("main", { class: "wl", "data-k": "welcome" },
+      h("div", { class: "wl-hero" },
+        wlStars([[42, 88, 1.8, 0, 3.2], [96, 46, 1.2, .8, 2.6], [150, 120, 1.5, .3, 4], [250, 70, 1.3, 1.4, 3.4], [340, 196, 1.7, .6, 2.9], [30, 232, 1.2, 1.1, 3.8], [64, 330, 1.5, 2, 3.1], [352, 300, 1.3, .2, 2.7], [210, 30, 1.1, 1.7, 3.6]]),
+        wlMoon(),
+        h("div", { class: "wl-center wl-in" },
+          h("div", { class: "wl-baby" }, wlBaby(150), zz),
+          h("h1", { class: "wl-title wl-in", vars: { "--d": ".15s" }, text: "Gloups" }),
+          h("p", { class: "wl-tag wl-in", vars: { "--d": ".3s" } }, "Le carnet de bébé", h("br"), "pour toute la famille."))),
+      wlCarousel(),
+      h("div", { class: "wl-foot wl-in", vars: { "--d": ".8s" } }, googleButton(), legal())));
+  }
+  function welcomeInvite(code) {
+    var step = function (n, on, b, t) { return h("li", { class: on ? "on" : null }, h("span", { class: "wl-n", text: String(n) }), h("span", null, b ? h("b", { text: b }) : null, t)); };
+    mount(h("main", { class: "wl", "data-k": "inv:" + code },
+      h("div", { class: "wl-hero inv" },
+        wlStars([[40, 70, 1.6, 0, 3.2], [120, 40, 1.2, .8, 2.6], [300, 56, 1.5, .3, 4], [356, 150, 1.3, 1.4, 3.4], [26, 200, 1.4, .6, 2.9], [340, 290, 1.2, 1.1, 3.8]]),
+        h("div", { class: "wl-center" },
+          h("span", { class: "wl-chip wl-in" }, h("i", { "aria-hidden": "true" }), "Invitation"),
+          h("div", { class: "wl-trio" },
+            h("span", { class: "wl-ring", "aria-hidden": "true" }),
+            h("span", { class: "wl-side l", "aria-hidden": "true" }, icon("family", 26)),
+            h("div", { class: "wl-pop" }, h("div", { class: "wl-baby s" }, wlBaby(110))),
+            h("span", { class: "wl-side r", "aria-hidden": "true" }, icon("plus", 26))),
+          h("h1", { class: "wl-title s wl-in", vars: { "--d": ".7s" } }, "On vous attend", h("br"), "dans la famille"),
+          h("p", { class: "wl-tag s wl-in", vars: { "--d": ".85s" }, text: "Quelqu'un vous invite à suivre bébé sur Gloups." }))),
+      h("div", { class: "wl-card inv wl-in", vars: { "--d": "1s" } },
+        h("div", { class: "wl-ticket" },
+          h("span", { class: "wl-code" }, h("span", { text: "Votre code" }), h("b", { text: code })),
+          h("span", { class: "wl-kept" }, icon("check", 14), "Gardé")),
+        h("ol", { class: "wl-steps" },
+          step(1, true, "Connectez-vous", " avec Google"),
+          step(2, false, null, "Vous rejoignez la famille"),
+          step(3, false, null, "Gloups s'installe sur votre écran"))),
+      h("div", { class: "wl-foot wl-in", vars: { "--d": "1.2s" } }, googleButton(), legal("Gratuit, sans mot de passe."))));
+  }
+  // Juste après la connexion, avant de créer ou rejoindre une famille
+  function screenHello() {
+    var cur = appEl.querySelector("main.wl.hello");
+    if (cur && cur.getAttribute("data-k") === "hello:" + (S.profile.first_name || "")) return;
+    var first = !S.helloSeen; S.helloSeen = true;
+    var burst = [0, 60, 120, 180, 240, 300].map(function (a, k) { return h("span", { class: "wl-spark" + (k % 2 ? " w" : ""), "aria-hidden": "true", vars: { "--a": a + "deg", "--d": (1.2 + (k % 3) * .04) + "s" } }); });
+    var choice = function (ic, cls, t1, t2, fn) {
+      return h("button", { class: "wl-choice", type: "button", onclick: fn },
+        h("span", { class: "wico " + cls }, icon(ic, 24)),
+        h("span", { class: "wtx grow" }, h("b", { text: t1 }), h("span", { text: t2 })),
+        icon("back", 20));
+    };
+    mount(h("main", { class: "wl hello" + (first ? "" : " still"), "data-k": "hello:" + (S.profile.first_name || "") },
+      h("div", { class: "wl-hero hello" },
+        h("span", { class: "wl-fill", "aria-hidden": "true" }),
+        h("div", { class: "wl-center" },
+          h("div", { class: "wl-pop d5" },
+            burst,
+            h("div", { class: "wl-baby" }, wlBaby(150, true)),
+            h("span", { class: "wl-ok", "aria-hidden": "true" }, icon("check", 20))),
+          h("h1", { class: "wl-title wl-in", vars: { "--d": "1.3s" }, text: "Bonjour " + (S.profile.first_name || "") }),
+          h("p", { class: "wl-tag wl-in", vars: { "--d": "1.45s" }, text: "Votre compte est prêt." }))),
+      h("div", { class: "wl-next wl-in", vars: { "--d": "1.7s" } },
+        h("span", { class: "eyebrow", text: "Pour commencer" }),
+        choice("plus", "couche", "Créer notre famille", "Bébé né ou à naître, jumeaux compris", function () { screenOnboarding("create"); }),
+        choice("note", "repas", "J'ai un code d'invitation", "Rejoindre une famille existante", function () { screenOnboarding("join"); })),
+      h("button", { class: "btn ghost wl-out wl-in", vars: { "--d": "1.9s" }, onclick: signOut, text: "Se déconnecter" })));
   }
   function emailBlock() {
     var box = h("div", { class: "stack" });
@@ -521,7 +704,7 @@
 
   /* ---------- Écran : première famille ---------- */
   function screenOnboarding(tab) {
-    tab = tab || "create";
+    if (!tab) { screenHello(); return; }
     var body = h("div", { class: "stack" });
     var seg = h("div", { class: "seg", role: "tablist" },
       h("button", { "aria-pressed": tab === "create" ? "true" : "false", onclick: function () { screenOnboarding("create"); }, text: "Créer une famille" }),
@@ -530,7 +713,7 @@
       h("div", { class: "row" }, logo("s"), h("span", { class: "muted", text: "Bonjour " + (S.profile.first_name || "") })),
       h("h1", { class: "title-l", text: tab === "create" ? "Créons votre famille" : "Rejoindre une famille" }),
       seg, body,
-      h("button", { class: "btn ghost", onclick: signOut, text: "Se déconnecter" })));
+      h("button", { class: "btn ghost", onclick: function () { screenHello(); }, text: "Retour" })));
     if (tab === "create") body.append(familyForm(async function (vals) {
       var r = await sb.rpc("api_v1_create_family", { p_family_name: vals.family, p_child_first_name: vals.child, p_child_birth_date: vals.born ? vals.date : null, p_child_due_date: vals.born ? null : vals.date, p_child_color: vals.color });
       if (r.error) { toast(errMsg(r.error), { error: true }); return; }
