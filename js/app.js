@@ -2322,6 +2322,7 @@
       S.isAdmin ? h("a", { href: "#/admin", class: "card", vars: { "text-decoration": "none", color: "inherit" } }, h("b", { class: "title-m", text: "Tableau de bord" }), h("span", { class: "small muted", text: "Chiffres globaux de Gloups, sans accès aux données des familles." })) : null,
       h("section", { class: "card" }, h("b", { class: "title-m", text: "Cet appareil" }),
         h("a", { href: "#/installer", class: "btn full", text: isStandalone() ? "App installée ✓" : "Installer sur l'écran d'accueil" }),
+        h("button", { class: "btn full", onclick: function () { location.hash = "#/"; setTimeout(function () { startTour(true); }, 700); }, text: "Revoir la visite guidée" }),
         h("button", { class: "btn full", onclick: signOut, text: "Se déconnecter" }),
         h("span", { class: "small muted", text: "Gloups " + CFG.version + " · données hébergées dans l'UE" }))));
     appEl.append(dock("famille", S.role !== "lecture"));
@@ -2499,6 +2500,112 @@
   window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); S.deferredInstall = e; });
 
   /* ---------- Navigation ---------- */
+  /* ---------- Visite guidée au premier lancement (v0.10.0) ---------- */
+  var TOUR = { on: false, i: 0, steps: [], root: null, timer: null };
+  function tourKey() { return "gloups.tour." + (S.user ? S.user.id : ""); }
+  function tourFind(sel) {
+    if (!sel) return null;
+    if (typeof sel === "function") return sel();
+    return document.querySelector(sel);
+  }
+  function tourSteps() {
+    var c = S.child ? S.child.first_name : "Bébé";
+    var canWrite = S.role !== "lecture";
+    var all = [
+      { title: "Bienvenue dans Gloups", body: c + " est prêt. On vous montre l'essentiel en 30 secondes.", cta: "C'est parti", first: true },
+      canWrite ? { sel: ".fab", round: true, title: "Notez en un tap", body: "Touchez +, puis une bulle : Repas, Sommeil, Couche ou Pleurs. Le minuteur démarre tout seul. « Plus » donne le bain, la température, le poids, une note et les berceuses." } : null,
+      canWrite ? { sel: ".fab", round: true, demo: true, title: "C'était plus tôt ?", body: "Ouvrez le +, puis restez appuyé sur une bulle : glissez sur l'arc pour placer le début et la fin." } : null,
+      { sel: "main.screen .nap", title: "Sa prochaine sieste", body: "Gloups apprend son rythme dès 3 sommeils notés et estime la prochaine sieste." },
+      { sel: function () { var s = document.querySelector("main.screen section.card .strip"); if (!s) return null; var c = s.closest("section.card"); return [c.firstElementChild, c.querySelector(".counts") || s]; }, title: "Toute la journée d'un coup d'œil", body: "Chaque saisie apparaît sur la frise et dans la liste. Touchez-en une pour la corriger, glissez-la vers la gauche pour la supprimer." },
+      { sel: '.dock [data-tab="journal"]', title: "Journal", body: "Toutes les saisies jour par jour ou en vue semaine, avec vos rendez-vous." },
+      { sel: '.dock [data-tab="tendances"]', title: "Tendances", body: "Son rythme sur 7 jours, le sommeil par 24 heures, les pleurs par heure et la courbe de poids." },
+      { sel: '.dock [data-tab="famille"]', title: "Famille", body: "Invitez l'autre parent avec un code : tout arrive chez lui en direct. Ajoutez un enfant, notez les rendez-vous, installez l'app. Vous pourrez aussi y revoir cette visite." },
+      { title: "À vous de jouer", body: "Bonne route avec " + c + " !", cta: "Terminer", last: true }
+    ];
+    return all.filter(function (s) { return s && (!s.sel || tourFind(s.sel)); });
+  }
+  function startTour(force) {
+    if (TOUR.on || !S.family) return;
+    if (!force && lsGet(tourKey())) return;
+    if (document.querySelector(".backdrop") || (fab && fab.level)) return;
+    TOUR.steps = tourSteps(); TOUR.i = 0; TOUR.on = true;
+    TOUR.root = h("div", { class: "tour", role: "dialog", "aria-modal": "true", "aria-label": "Visite guidée" });
+    document.body.appendChild(TOUR.root);
+    document.documentElement.classList.add("tour-open");
+    tourShow();
+    TOUR.timer = setInterval(tourPlace, 600);
+    window.addEventListener("resize", tourPlace);
+    track("action", force ? "visite_relancee" : "visite_debut");
+  }
+  function endTour(done) {
+    if (!TOUR.on) return;
+    lsSet(tourKey(), "1");
+    clearInterval(TOUR.timer); window.removeEventListener("resize", tourPlace);
+    var r = TOUR.root; TOUR.on = false; TOUR.root = null;
+    document.documentElement.classList.remove("tour-open");
+    if (r) { r.classList.add("out"); setTimeout(function () { r.remove(); }, 250); }
+    track("action", done ? "visite_terminee" : "visite_passee");
+  }
+  function tourDemo() {
+    var svg = document.createElementNS(SVGNS, "svg");
+    svg.setAttribute("viewBox", "0 0 160 60"); svg.setAttribute("width", "150"); svg.setAttribute("height", "56");
+    ["tour-arc-bg", "tour-arc"].forEach(function (c) {
+      var p = document.createElementNS(SVGNS, "path");
+      p.setAttribute("d", "M10 56a70 70 0 0 1 140 0"); p.setAttribute("class", c); svg.appendChild(p);
+    });
+    return h("div", { class: "tour-demo", "aria-hidden": "true" }, h("span", { class: "tour-press" }, h("span", { class: "tour-hold" })), svg);
+  }
+  function tourShow() {
+    var s = TOUR.steps[TOUR.i]; if (!s) { endTour(true); return; }
+    var n = TOUR.steps.filter(function (x) { return x.sel; }).length;
+    var k = TOUR.steps.slice(0, TOUR.i + 1).filter(function (x) { return x.sel; }).length;
+    var next = function () { if (TOUR.i >= TOUR.steps.length - 1) endTour(true); else { TOUR.i++; tourShow(); } };
+    var tip;
+    if (!s.sel) {
+      tip = h("div", { class: "tour-card" },
+        h("div", { class: "tour-baby" + (s.last ? " party" : "") }, logo()),
+        h("h2", { text: s.title }), h("p", { text: s.body }),
+        h("button", { class: "btn primary full", type: "button", onclick: next, text: s.cta }),
+        s.first ? h("button", { class: "btn ghost", type: "button", onclick: function () { endTour(false); }, text: "Plus tard" }) : null);
+      TOUR.root.replaceChildren(h("div", { class: "tour-dim" }), tip);
+    } else {
+      if (!TOUR.root.querySelector(".tour-spot")) TOUR.root.replaceChildren(h("div", { class: "tour-spot" }), h("div", { class: "tour-ring" }));
+      else Array.prototype.forEach.call(TOUR.root.querySelectorAll(".tour-tip, .tour-dim, .tour-card"), function (e) { e.remove(); });
+      tip = h("div", { class: "tour-tip" },
+        h("span", { class: "tour-k", text: "Étape " + k + " sur " + n }),
+        h("b", { text: s.title }), h("p", { text: s.body }),
+        s.demo ? tourDemo() : null,
+        h("div", { class: "tour-foot" },
+          h("button", { class: "tour-skip", type: "button", onclick: function () { endTour(false); }, text: "Passer" }),
+          h("span", { class: "tour-dots", "aria-hidden": "true" }, TOUR.steps.filter(function (x) { return x.sel; }).map(function (x, j) { return h("i", { class: j === k - 1 ? "on" : null }); })),
+          h("button", { class: "btn primary", type: "button", onclick: next, text: "Suivant" })));
+      TOUR.root.appendChild(tip);
+      var t = tourFind(s.sel); if (Array.isArray(t)) t = t[0];
+      if (t) {
+        var r0 = t.getBoundingClientRect();
+        if (r0.top < 60 || r0.bottom > innerHeight - 90) t.scrollIntoView({ block: "center" });
+      }
+    }
+    tourPlace();
+    var b = tip.querySelector(".btn.primary"); if (b) b.focus({ preventScroll: true });
+  }
+  function tourPlace() {
+    if (!TOUR.on) return;
+    var s = TOUR.steps[TOUR.i]; if (!s || !s.sel) return;
+    var t = tourFind(s.sel), spot = TOUR.root.querySelector(".tour-spot"), ring = TOUR.root.querySelector(".tour-ring"), tip = TOUR.root.querySelector(".tour-tip");
+    if (!t || !spot || !tip) return;
+    var r = Array.isArray(t) ? t.reduce(function (a, e) { var b = e.getBoundingClientRect(); return a ? { left: Math.min(a.left, b.left), top: Math.min(a.top, b.top), right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom) } : { left: b.left, top: b.top, right: b.right, bottom: b.bottom }; }, null) : t.getBoundingClientRect(), pad = s.round ? 6 : 10;
+    r.width = r.right - r.left; r.height = r.bottom - r.top;
+    var box = { left: r.left - pad, top: r.top - pad, width: r.width + 2 * pad, height: r.height + 2 * pad };
+    var rad = s.round ? box.width / 2 : 22;
+    [spot, ring].forEach(function (e) {
+      e.style.left = box.left + "px"; e.style.top = box.top + "px"; e.style.width = box.width + "px"; e.style.height = box.height + "px"; e.style.borderRadius = rad + "px";
+    });
+    var th = tip.offsetHeight, below = box.top + box.height + 14, above = box.top - 14 - th;
+    var top = box.top + box.height / 2 > innerHeight / 2 ? Math.max(12, above) : Math.min(innerHeight - th - 12, below);
+    tip.style.top = top + "px";
+  }
+  window.addEventListener("keydown", function (e) { if (TOUR.on && e.key === "Escape") endTour(false); });
   function route() {
     if (S.loading) return;
     if (!S.user) { screenWelcome(); return; }
@@ -2524,7 +2631,7 @@
     else if (r === "famille") screenFamily();
     else if (r === "installer") screenInstall();
     else if (r === "admin" && S.isAdmin) screenAdmin();
-    else screenHome();
+    else { screenHome(); if (!TOUR.on) setTimeout(function () { if (!location.hash.replace(/^#\/?/, "")) startTour(false); }, 900); }
     if (ENTER) { if (trendsEnter) trendsPrev = prevIdx; else afterEnter(r, prevIdx); }
     ENTER = false;
   }
