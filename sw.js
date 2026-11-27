@@ -1,6 +1,6 @@
 /* Gloups · service worker : l'app s'ouvre même hors connexion. Les données passent toujours par le réseau. */
-var VERSION = "gloups-0.12.3";
-var SHELL = ["./", "index.html", "css/app.css", "js/config.js", "js/supabase.js", "js/app.js", "manifest.webmanifest",
+var VERSION = "gloups-0.13.0";
+var SHELL = ["./", "index.html", "css/app.css", "js/config.js", "js/supabase.js", "js/app.js", "js/sleep-prior.js", "manifest.webmanifest",
   "fonts/google-sans-flex.woff2", "icons/icon.svg", "icons/apple-touch-icon.png", "icons/icon-192.png", "icons/icon-512.png"];
 
 self.addEventListener("install", function (e) {
