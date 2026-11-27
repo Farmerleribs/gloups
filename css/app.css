@@ -828,3 +828,25 @@ html.tour-open .fab, html.tour-open .dock-wrap { pointer-events: none; }
 .adm-cal { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 5px; }
 .adm-cal i { aspect-ratio: 1; border-radius: 5px; }
 .hbar.w { grid-template-columns: 136px 1fr auto; }
+
+/* ---------- Famille simplifiée et Google Agenda (v0.12.0) ---------- */
+.center { text-align: center; }
+.chev { display: inline-flex; color: var(--muted); flex: none; }
+.chip-btn { border: 0; background: var(--soft); color: var(--ink); border-radius: 999px; padding: 8px 14px; min-height: 36px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.fam-who { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: none; padding: 0; font: inherit; color: var(--ink); text-align: left; cursor: pointer; min-height: 44px; }
+.fam-who .mstack { min-height: 0; }
+.fam-row { flex-direction: row; align-items: center; gap: 12px; text-decoration: none; color: inherit; }
+.fam-row .grow { display: flex; flex-direction: column; gap: 2px; }
+.fam-ic, .gc-ic { width: 42px; height: 42px; border-radius: 12px; background: var(--ok-bg); color: var(--ok); display: flex; align-items: center; justify-content: center; flex: none; }
+.gc-ic { width: 56px; height: 56px; border-radius: 16px; }
+.fam-nav { padding: 4px 16px; gap: 0; }
+.fam-nav a { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; color: var(--ink); text-decoration: none; font-size: 15px; }
+.fam-nav a + a { border-top: 1px solid var(--line); }
+.gc-ok { color: var(--ok); display: inline-flex; align-items: center; gap: 6px; }
+.gc-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; display: inline-block; flex: none; }
+.gc-intro h2 { margin: 0; }
+.gc-intro p { margin: 0; }
+.gc-step { display: flex; gap: 12px; align-items: flex-start; font-size: 15px; line-height: 1.35; }
+.gc-step .n { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--green); color: var(--green-ink); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.gc-sync { display: flex; gap: 10px; align-items: flex-start; background: var(--ok-bg); color: var(--ok); border-radius: 16px; padding: 12px 14px; font-size: 14px; line-height: 1.4; }
+.gc-sync svg { flex: none; margin-top: 1px; }
