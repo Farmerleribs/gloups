@@ -94,6 +94,7 @@
     list: "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
     chart: "M5 20V11M12 20V5M19 20v-8",
     cal: "M4 6h16v14H4zM4 10h16M8 3v4M16 3v4",
+    chev: "M9 6l6 6-6 6",
     music: "M9 18V5l11-2v13M9 18a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0zM20 16a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0z",
     noise: "M3 12h2M7 8v8M11 5v14M15 9v6M19 7v10",
     play: "M8 5l11 7-11 7z",
@@ -584,7 +585,7 @@
     track("action", "connexion_google_gsi");
   }
   function legal(extra) {
-    return h("p", { class: "wl-legal" }, extra || "Gratuit, sans mot de passe. Données hébergées dans l'Union européenne.", h("br"),
+    return h("p", { class: "wl-legal" }, extra || "Données hébergées dans l'Union européenne.", h("br"),
       h("a", { href: "confidentialite.html", text: "Confidentialité" }), " · ", h("a", { href: "conditions.html", text: "Conditions" }));
   }
   function screenWelcome() {
@@ -628,7 +629,7 @@
           step(1, true, "Connectez-vous", " avec Google"),
           step(2, false, null, "Vous rejoignez la famille"),
           step(3, false, null, "Gloups s'installe sur votre écran"))),
-      h("div", { class: "wl-foot wl-in", vars: { "--d": "1.2s" } }, googleButton(), legal("Gratuit, sans mot de passe."))));
+      h("div", { class: "wl-foot wl-in", vars: { "--d": "1.2s" } }, googleButton(), legal())));
   }
   // Juste après la connexion, avant de créer ou rejoindre une famille
   function screenHello() {
@@ -1859,15 +1860,6 @@
     var day = t === today ? "Aujourd'hui" : t === today + DAY_MS ? "Demain" : DAYS[s.getDay()] + " " + s.getDate() + " " + MONTHS[s.getMonth()];
     return day + " · " + hhmm(s) + (a.ends_at ? " à " + hhmm(a.ends_at) : "");
   }
-  // Lien Google Agenda prérempli (aucune autorisation demandée)
-  function gcalLink(a) {
-    var f = function (d) { return new Date(d).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, ""); };
-    var who = childOf(a);
-    var p = new URLSearchParams({ action: "TEMPLATE", text: a.title + (who ? " · " + who : ""), dates: f(a.starts_at) + "/" + f(apptEnd(a)) });
-    if (a.location) p.set("location", a.location);
-    p.set("details", (a.notes ? a.notes + "\n\n" : "") + "Ajouté depuis Gloups");
-    return "https://calendar.google.com/calendar/render?" + p.toString();
-  }
   function switchBtn(on, label, sub, onchange) {
     var b = h("button", { type: "button", class: "switch-row", role: "switch", "aria-checked": on ? "true" : "false" },
       h("span", { class: "grow" }, h("b", { text: label }), sub ? h("span", { class: "small muted", text: sub }) : null), h("span", { class: "switch", "aria-hidden": "true" }));
@@ -1886,7 +1878,6 @@
     })();
     var end = edit ? apptEnd(a) : new Date(start.getTime() + 30 * 60000);
     var reminders = edit ? (a.reminders || []).slice() : ["veille", "1h"];
-    var gcal = lsGet("gloups.gcal") === "1";
     var title = h("input", { class: "input", maxlength: 120, value: edit ? a.title : KIND_LBL[kind] });
     title.addEventListener("input", function () { touched = true; });
     var kinds = h("div", { class: "chips" });
@@ -1928,10 +1919,9 @@
       saveBtn.disabled = false;
       if (r.error) { toast(errMsg(r.error), { error: true }); return; }
       S.appts = (S.appts || []).filter(function (x) { return x.id !== r.data.id; }).concat([r.data]).sort(function (x, y) { return new Date(x.starts_at) - new Date(y.starts_at); });
-      lsSet("gloups.gcal", gcal ? "1" : null);
       closeSheet(); route();
       toast(edit ? "Rendez-vous modifié" : "Rendez-vous enregistré · " + apptWhen(r.data));
-      if (gcal) setTimeout(function () { sheetApptDetail(r.data, { justSaved: true }); }, 280);
+      gcalPush(r.data.id, edit ? "Modifié aussi dans Google Agenda" : "Ajouté aussi à Google Agenda");
     });
     openSheet(edit ? "Modifier le rendez-vous" : "Nouveau rendez-vous", h("div", { class: "stack" },
       h("div", { class: "field" }, h("span", { text: "Type" }), kinds),
@@ -1942,8 +1932,7 @@
         h("label", { class: "field" }, h("span", { text: "Fin" }), t2)),
       h("label", { class: "field" }, h("span", { text: "Lieu (facultatif)" }), loc),
       h("label", { class: "field" }, h("span", { text: "Notes (facultatif)" }), notes),
-      h("div", { class: "field" }, h("span", { text: "Rappels dans l'agenda abonné" }), rem),
-      switchBtn(gcal, "Ajouter aussi à mon Google Agenda", "Propose l'ajout en un tap juste après l'enregistrement", function (v) { gcal = v; }),
+      h("div", { class: "field" }, h("span", { text: "Rappels dans votre agenda" }), rem),
       saveBtn));
   }
   function sheetApptDetail(a, opts) {
@@ -1957,21 +1946,20 @@
         h("span", { class: "n", text: a.title + (who ? " · " + who : "") }),
         a.location ? h("span", { class: "small", text: a.location }) : null,
         a.notes ? h("p", { class: "small", text: a.notes }) : null),
-      opts.justSaved ? h("p", { class: "small muted", text: "Enregistré dans Gloups. Ajoutez-le aussi à votre Google Agenda :" }) : null,
-      h("a", { class: "btn primary full", href: gcalLink(a), target: "_blank", rel: "noopener" }, "Ajouter à Google Agenda"),
+      gcalCount() ? h("div", { class: "gc-sync" }, icon("cal", 20), h("span", null, h("b", { text: gcalWhere() }), ". Une modification ou une suppression ici y est reportée tout de suite.")) : null,
       canWrite ? h("div", { class: "big2" },
         h("button", { class: "btn", onclick: function () { sheetAppt(a); }, text: "Modifier" }),
         h("button", { class: "btn", vars: { color: "var(--alert)" }, onclick: function () { removeAppt(a); }, text: "Supprimer" })) : null,
-      h("p", { class: "small muted", text: "Le bouton Google Agenda crée une copie : une modification faite ensuite dans Gloups n'y sera pas reportée. Pour un suivi automatique, utilisez l'abonnement (onglet Famille)." })));
+      !gcalMe() || !gcalMe().connected ? h("a", { class: "btn ghost full", href: "#/google-agenda", onclick: function () { closeSheet(); } }, icon("cal", 18), "Connecter Google Agenda") : null));
   }
   async function removeAppt(a) {
     var r = await health.from("appointments").update({ deleted_at: new Date().toISOString() }).eq("id", a.id);
     if (r.error) { toast(errMsg(r.error), { error: true }); return; }
     S.appts = (S.appts || []).filter(function (x) { return x.id !== a.id; });
-    closeSheet(); route();
+    closeSheet(); route(); gcalPush(a.id, null);
     toast("Rendez-vous supprimé", { action: { label: "Rétablir", fn: async function () {
       var u = await health.from("appointments").update({ deleted_at: null }).eq("id", a.id).select().single();
-      if (!u.error) { S.appts = S.appts.concat([u.data]).sort(function (x, y) { return new Date(x.starts_at) - new Date(y.starts_at); }); route(); }
+      if (!u.error) { S.appts = S.appts.concat([u.data]).sort(function (x, y) { return new Date(x.starts_at) - new Date(y.starts_at); }); route(); gcalPush(u.data.id, null); }
     } } });
   }
   function apptRow(a) {
@@ -2232,14 +2220,14 @@
     function draw() {
       var name = S.child ? S.child.first_name : "votre enfant";
       if (!isParent) {
-        box.replaceChildren(h("p", { class: "small", text: "Un parent peut abonner l'agenda de la famille. Chaque rendez-vous a aussi un bouton « Ajouter à Google Agenda »." }));
+        box.replaceChildren(h("p", { class: "small", text: "Un parent peut créer ce lien. Pour Google Agenda, utilisez la connexion directe dans Famille." }));
         return;
       }
       var active = feed && !feed.revoked_at, tok = lsGet("gloups.feed." + S.family.id);
       if (feed && feed.options) { opts.summary = !!feed.options.summary; opts.events = !!feed.options.events; }
       if (!active) {
         box.replaceChildren(
-          h("p", { class: "small", text: "Un lien privé à ajouter une seule fois dans Google Agenda ou l'agenda de l'iPhone. Chaque rendez-vous créé, déplacé ou annulé dans Gloups suit tout seul." }),
+          h("p", { class: "small", text: "Un lien privé à ajouter une seule fois dans l'agenda de l'iPhone ou dans Outlook. Les rendez-vous suivent tout seuls, avec un peu de retard." }),
           h("button", { class: "btn primary full", onclick: create, text: "Créer le lien d'abonnement" }));
         return;
       }
@@ -2247,11 +2235,9 @@
       if (tok) {
         var https = feedUrl(tok), webcal = https.replace(/^https:/, "webcal:");
         parts.push(
-          h("a", { class: "btn primary full", href: "https://calendar.google.com/calendar/r?cid=" + encodeURIComponent(webcal), target: "_blank", rel: "noopener" }, "Ajouter à Google Agenda"),
           h("div", { class: "big2" },
-            h("a", { class: "btn", href: webcal }, "Agenda iPhone"),
-            h("button", { class: "btn", onclick: function () { navigator.clipboard.writeText(https).then(function () { toast("Lien copié. Gardez-le privé."); }); }, text: "Copier le lien" })),
-          h("p", { class: "small muted", text: "Google Agenda : ouvrez ce bouton de préférence sur un ordinateur, l'app mobile Google Agenda ne sait pas s'abonner. L'agenda apparaît ensuite sur le téléphone." }));
+            h("a", { class: "btn primary", href: webcal }, "Agenda iPhone"),
+            h("button", { class: "btn", onclick: function () { navigator.clipboard.writeText(https).then(function () { toast("Lien copié. Gardez-le privé."); }); }, text: "Copier le lien" })));
       } else {
         parts.push(h("p", { class: "small", text: "Abonnement actif depuis le " + new Date(feed.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + ". Le lien complet ne s'affiche que sur l'appareil qui l'a créé." }),
           confirmBtn("Créer un nouveau lien ici", "Confirmer : l'ancien lien cessera de fonctionner", create));
@@ -2261,7 +2247,7 @@
         h("div", { class: "switch-row static" }, h("span", { class: "grow" }, h("b", { text: "Rendez-vous" }), h("span", { class: "small muted", text: "pédiatre, sage-femme, vaccins, PMI, examens" })), h("span", { class: "small", text: "Toujours" })),
         switchBtn(opts.summary, "Résumé de la journée", "un événement par jour : repas, couches, sommeil", function (v) { setOpt("summary", v); }),
         switchBtn(opts.events, "Toutes les saisies", "chaque tétée, couche et sieste (très chargé)", function (v) { setOpt("events", v); }),
-        h("div", { class: "card soft small", text: "Google Agenda relit ce lien à son rythme : un changement peut mettre plusieurs heures à apparaître, parfois jusqu'à une journée, sans moyen de forcer la mise à jour. L'agenda de l'iPhone suit son propre réglage de rafraîchissement." }),
+        h("div", { class: "card soft small", text: "Ces agendas relisent le lien à leur rythme : un changement peut mettre quelques heures à apparaître." }),
         confirmBtn("Couper le lien", "Confirmer : couper le lien pour tous les agendas", revoke));
       box.replaceChildren.apply(box, parts);
     }
@@ -2269,21 +2255,115 @@
       sb.from("calendar_feeds").select("created_at, revoked_at, options").eq("family_id", S.family.id).maybeSingle().then(function (r) { feed = r.data || null; draw(); });
       box.append(h("span", { class: "small muted", text: "Chargement..." }));
     } else draw();
-    return h("section", { class: "card" }, h("b", { class: "title-m", text: "Agenda et Google Agenda" }),
-      h("p", { class: "small muted", text: "Retrouvez les rendez-vous dans votre agenda habituel, sans rien ressaisir." }), box);
+    return h("section", { class: "card" }, h("b", { class: "title-m", text: "Autre agenda (iPhone, Outlook)" }), box);
   }
 
-  /* ---------- Écran : famille ---------- */
-  function screenFamily() {
-    var isParent = S.role === "parent";
-    var roleLbl = { parent: "Parent", proche: "Proche", lecture: "Lecture" };
-    var invite = h("div", { class: "stack" });
-    var invRole = "proche";
+  /* ---------- Google Agenda (v0.12.0) : rendez-vous synchronisés dans un agenda « Gloups » de chaque membre ---------- */
+  var GCAL_SCOPE = "https://www.googleapis.com/auth/calendar.app.created";
+  var GCAL_REDIRECT = "https://gloups.info/";
+  var GCAL = { busy: false };
+  var GCAL_ERR = {
+    retry: "Encore une étape : appuyez à nouveau sur « Connecter mon Google Agenda ».",
+    not_configured: "La synchronisation Google Agenda n'est pas encore activée sur le serveur.",
+    scope: "Cochez l'accès à Google Agenda sur l'écran Google pour continuer.",
+    forbidden: "Vous ne faites plus partie de cette famille."
+  };
+  async function loadGcal() {
+    if (!S.family) { S.gcal = null; return; }
+    var r = await sb.rpc("api_v1_gcal_status", { p_family: S.family.id });
+    S.gcal = r.error ? null : r.data;
+    if (location.hash === "#/google-agenda" || location.hash === "#/famille") route();
+  }
+  function gcalMembers() { return S.gcal && S.gcal.members ? S.gcal.members : []; }
+  function gcalMe() { return gcalMembers().find(function (m) { return m.user_id === S.user.id; }) || null; }
+  function gcalLive() { return gcalMembers().filter(function (m) { return m.connected && !m.error; }); }
+  function gcalCount() { return gcalLive().length; }
+  // « Dans votre Google Agenda et celui de Capucine »
+  function gcalWhere() {
+    var mine = gcalLive().some(function (m) { return m.user_id === S.user.id; });
+    var others = gcalNames().filter(function (n) { return n !== "vous"; });
+    var join = function (a) { return a.length < 2 ? a.join("") : a.slice(0, -1).join(", ") + " et " + a[a.length - 1]; };
+    if (mine && others.length) return "Dans votre Google Agenda et celui de " + join(others);
+    if (mine) return "Dans votre Google Agenda";
+    return "Dans le Google Agenda de " + join(others);
+  }
+  function gcalNames() { return gcalLive().map(function (m) { return m.user_id === S.user.id ? "vous" : S.profiles[m.user_id] || "un membre"; }); }
+  async function gcalCall(body) {
+    try {
+      var r = await sb.functions.invoke("gcal", { body: Object.assign({ family_id: S.family.id }, body) });
+      if (r.error) {
+        var detail = null;
+        try { detail = r.error.context && await r.error.context.json(); } catch (e) { detail = null; }
+        return { error: (detail && detail.error) || "network" };
+      }
+      return r.data || {};
+    } catch (e) { return { error: "network" }; }
+  }
+  // Envoie un rendez-vous (créé, modifié, supprimé ou rétabli) aux agendas Google connectés de la famille
+  function gcalPush(id, label) {
+    if (!S.family || !gcalCount()) return;
+    gcalCall({ action: "sync", appointment_id: id }).then(function (res) {
+      if (res.error || res.errors) { toast("Google Agenda n'a pas pu être mis à jour. Voir Famille, Google Agenda.", { error: true }); loadGcal(); return; }
+      if (label && res.members) toast(label);
+    });
+  }
+  async function gcalConnect() {
+    if (location.origin + "/" !== GCAL_REDIRECT) { toast("La connexion à Google Agenda se fait depuis gloups.info.", { error: true }); return; }
+    try { await loadGsi(); } catch (e) { toast("Google ne répond pas. Réessayez dans un instant.", { error: true }); return; }
+    if (!google.accounts.oauth2) { toast("Google ne répond pas. Réessayez dans un instant.", { error: true }); return; }
+    var st = Array.from(crypto.getRandomValues(new Uint8Array(16))).map(function (x) { return x.toString(16).padStart(2, "0"); }).join("");
+    lsSet("gloups.gcal.state", st + "|" + S.family.id);
+    track("action", "gcal_connexion");
+    google.accounts.oauth2.initCodeClient({ client_id: GOOGLE_CLIENT_ID, scope: GCAL_SCOPE, ux_mode: "redirect", redirect_uri: GCAL_REDIRECT, state: st, login_hint: S.user.email || undefined }).requestCode();
+  }
+  // Retour de Google : la fonction serveur échange le code, crée l'agenda et y ajoute les rendez-vous
+  async function gcalFinishConnect() {
+    var err = lsGet("gloups.gcal.err");
+    if (err) { lsSet("gloups.gcal.err", null); toast(err === "access_denied" ? "Connexion annulée : Google Agenda n'est pas relié." : "Google a refusé la connexion. Réessayez.", { error: true }); }
+    var c = lsGet("gloups.gcal.code");
+    if (!c || !S.family) return;
+    lsSet("gloups.gcal.code", null);
+    var parts = c.split("|");
+    if (parts[1] && parts[1] !== S.family.id) return;
+    GCAL.busy = true; route();
+    var res = await gcalCall({ action: "connect", code: parts[0], redirect_uri: GCAL_REDIRECT });
+    GCAL.busy = false;
+    if (res.error) toast(GCAL_ERR[res.error] || "La connexion à Google Agenda a échoué. Réessayez.", { error: true });
+    else { track("action", "gcal_connecte"); toast("Google Agenda connecté" + (res.synced ? " · " + res.synced + " rendez-vous ajouté" + (res.synced > 1 ? "s" : "") : "")); }
+    await loadGcal();
+  }
+  function armBtn(txt, confirmTxt, fn, cls) {
+    var armed = false, b = h("button", { class: cls || "btn ghost full danger", text: txt });
+    b.addEventListener("click", function () {
+      if (!armed) { armed = true; b.textContent = confirmTxt; setTimeout(function () { armed = false; b.textContent = txt; }, 4000); return; }
+      fn(b);
+    });
+    return b;
+  }
+
+  /* ---------- Écran : famille (v0.12.0 : l'essentiel, le reste dans Réglages et aide) ---------- */
+  var ROLE_LBL = { parent: "Parent", proche: "Proche", lecture: "Lecture" };
+  function chev() { return h("span", { class: "chev", "aria-hidden": "true" }, icon("chev", 18)); }
+  function whoText() {
+    var groups = { parent: [], proche: [], lecture: [] };
+    S.members.forEach(function (m) { (groups[m.role] || groups.lecture).push(S.profiles[m.user_id] + (m.user_id === S.user.id ? " (vous)" : "")); });
+    var label = { parent: ["parent", "parents"], proche: ["proche", "proches"], lecture: ["en lecture", "en lecture"] };
+    var join = function (a) { return a.length < 2 ? a.join("") : a.slice(0, -1).join(", ") + " et " + a[a.length - 1]; };
+    return ["parent", "proche", "lecture"].filter(function (k) { return groups[k].length; })
+      .map(function (k) { return join(groups[k]) + ", " + label[k][groups[k].length > 1 ? 1 : 0]; }).join(" · ");
+  }
+  function sheetMembers() {
+    openSheet("Membres", h("div", { class: "stack" },
+      S.members.map(function (m) { var me = m.user_id === S.user.id; return h("div", { class: "member" }, memberAvatar(m), h("span", { class: "grow" }, h("span", { text: S.profiles[m.user_id] + (me ? " (vous)" : "") }), h("br"), h("span", { class: "small muted mstate", "data-uid": m.user_id, text: me ? "cet appareil" : S.online[m.user_id] ? "dans l'app" : "" })), h("span", { class: "role", text: ROLE_LBL[m.role] })); }),
+      S.role === "parent" ? h("button", { class: "btn primary full", onclick: function () { closeSheet(); setTimeout(sheetInvite, 260); }, text: "Inviter quelqu'un" }) : null));
+  }
+  function sheetInvite() {
+    var invite = h("div", { class: "stack" }), invRole = "proche";
     function drawInvite() {
       invite.replaceChildren(
-        h("div", { class: "seg" }, ["parent", "proche", "lecture"].map(function (r) { return h("button", { "aria-pressed": invRole === r ? "true" : "false", onclick: function () { invRole = r; drawInvite(); }, text: roleLbl[r] }); })),
+        h("div", { class: "seg" }, ["parent", "proche", "lecture"].map(function (r) { return h("button", { "aria-pressed": invRole === r ? "true" : "false", onclick: function () { invRole = r; drawInvite(); }, text: ROLE_LBL[r] }); })),
         h("p", { class: "small", text: { parent: "Parent : voit et saisit tout, gère la famille et les invitations.", proche: "Proche : voit et saisit repas, sommeils, couches et soins. Idéal pour grands-parents et nounou.", lecture: "Lecture : consulte seulement." }[invRole] }),
-        h("button", { class: "btn light full", onclick: createInvite, text: "Créer une invitation" }));
+        h("button", { class: "btn primary full", onclick: createInvite, text: "Créer une invitation" }));
     }
     async function createInvite() {
       var r = await sb.rpc("api_v1_create_invitation", { p_family: S.family.id, p_role: invRole });
@@ -2294,37 +2374,124 @@
         h("span", { class: "small", text: "Code d'invitation, valable 7 jours, une personne" }),
         h("span", { class: "codebox", text: code }),
         h("div", { class: "big2" },
-          navigator.share ? h("button", { class: "btn light", onclick: function () { navigator.share({ title: "Gloups", text: msg }).catch(function () {}); } }, icon("share", 18), "Partager") : null,
-          h("button", { class: "btn light", onclick: function () { navigator.clipboard.writeText(msg).then(function () { toast("Message copié"); }); }, text: "Copier le message" })),
-        h("button", { class: "btn ghost", vars: { color: "var(--green-ink)" }, onclick: drawInvite, text: "Nouvelle invitation" }));
+          navigator.share ? h("button", { class: "btn primary", onclick: function () { navigator.share({ title: "Gloups", text: msg }).catch(function () {}); } }, icon("share", 18), "Partager") : null,
+          h("button", { class: "btn", onclick: function () { navigator.clipboard.writeText(msg).then(function () { toast("Message copié"); }); }, text: "Copier le message" })),
+        h("button", { class: "btn ghost", onclick: drawInvite, text: "Nouvelle invitation" }));
     }
     drawInvite();
+    openSheet("Inviter quelqu'un", invite);
+  }
+  function screenFamily() {
+    var isParent = S.role === "parent";
+    if (S.gcal === undefined) { S.gcal = null; loadGcal(); }
+    var me = gcalMe(), gOk = me && me.connected && !me.error;
+    var gTxt = me && me.connected ? (me.error ? "À reconnecter" : "Connecté, les rendez-vous s'y ajoutent seuls") : "Vos rendez-vous dans votre agenda, automatiquement";
+    var kidsTitle = S.children.length > 1 ? "les enfants" : S.children.length ? S.children[0].first_name : "bébé";
     mount(h("main", { class: "screen" },
       h("span", { class: "eyebrow", text: "Famille" }),
       h("h1", { class: "title-l", text: S.family.name }),
-      S.memberships.length > 1 ? h("div", { class: "card" }, h("b", { text: "Mes familles" }), S.memberships.map(function (m) {
-        return h("button", { class: "btn full" + (m.family_id === S.family.id ? " primary" : ""), onclick: async function () { lsSet("gloups.family", m.family_id); lsSet("gloups.child", null); await boot(true); }, text: m.families.name });
+      h("section", { class: "card" },
+        h("div", { class: "row between" }, h("b", { class: "title-m", text: S.children.length > 1 ? "Enfants" : "Enfant" }),
+          isParent ? h("button", { class: "chip-btn", onclick: function () { openSheet("Ajouter un enfant", familyForm(addChild, { childOnly: true })); }, text: "+ Ajouter" }) : null),
+        S.children.map(function (c) { return h("div", { class: "member" }, h("span", { class: "avatar", vars: { background: c.color }, text: initials(c.first_name) }), h("span", { class: "grow" }, h("b", { text: c.first_name }), h("br"), h("span", { class: "small muted", text: ageLabel(c) }))); })),
+      h("section", { class: "card" },
+        h("b", { class: "title-m", text: "Qui suit " + kidsTitle }),
+        h("button", { class: "fam-who", onclick: sheetMembers, "aria-label": "Voir les membres" },
+          h("span", { class: "mstack" }, S.members.slice(0, 5).map(function (m) { return memberAvatar(m); })),
+          h("span", { class: "grow small", text: whoText() }), chev()),
+        S.members.length < 2 ? h("span", { class: "small muted", text: "Invitez l'autre parent : chaque saisie s'affichera chez lui en direct." }) : null,
+        isParent ? h("button", { class: "btn primary full", onclick: sheetInvite, text: "Inviter quelqu'un" }) : null),
+      h("a", { href: "#/google-agenda", class: "card fam-row" },
+        h("span", { class: "fam-ic", "aria-hidden": "true" }, icon("cal", 22)),
+        h("span", { class: "grow" }, h("b", { text: "Google Agenda" }), h("span", { class: "small " + (gOk ? "gc-ok" : "muted") }, gOk ? h("i", { class: "gc-dot" }) : null, gTxt)),
+        chev()),
+      h("nav", { class: "card fam-nav", "aria-label": "Autres réglages" },
+        h("a", { href: "#/reglages" }, h("span", { text: "Réglages et aide" }), chev()),
+        S.isAdmin ? h("a", { href: "#/admin" }, h("span", null, "Tableau de bord ", h("span", { class: "small muted", text: "· visible par vous seul" })), chev()) : null)));
+    appEl.append(dock("famille", S.role !== "lecture"));
+  }
+
+  /* ---------- Écran : réglages et aide ---------- */
+  function screenSettings() {
+    var isParent = S.role === "parent";
+    mount(h("main", { class: "screen" },
+      h("a", { href: "#/famille", class: "small", text: "‹ Famille" }),
+      h("h1", { class: "title-l", text: "Réglages et aide" }),
+      S.memberships.length > 1 ? h("section", { class: "card" }, h("b", { class: "title-m", text: "Mes familles" }), S.memberships.map(function (m) {
+        return h("button", { class: "btn full" + (m.family_id === S.family.id ? " primary" : ""), onclick: async function () { lsSet("gloups.family", m.family_id); lsSet("gloups.child", null); S.gcal = undefined; await boot(true); }, text: m.families.name });
       })) : null,
-      h("section", { class: "card" }, h("b", { class: "title-m", text: "Enfants" }),
-        S.children.map(function (c) { return h("div", { class: "member" }, h("span", { class: "avatar", vars: { background: c.color }, text: initials(c.first_name) }), h("span", { class: "grow" }, h("b", { text: c.first_name }), h("br"), h("span", { class: "small muted", text: ageLabel(c) }))); }),
-        isParent && S.children.length > 1 ? switchBtn(twinMode(), S.children.length === 2 ? "Mode jumeaux" : "Mode multiples", "Choisir à chaque saisie : un enfant ou " + allLabel().toLowerCase() + " d'un coup", async function (v) {
-          var st = Object.assign({}, S.family.settings || {}, { twins: v });
-          var u = await sb.from("families").update({ settings: st }).eq("id", S.family.id);
-          if (u.error) { toast(errMsg(u.error), { error: true }); return; }
-          S.family.settings = st; track("action", v ? "jumeaux_on" : "jumeaux_off");
-        }) : null,
-        isParent ? h("button", { class: "btn full", onclick: function () { openSheet("Ajouter un enfant", familyForm(addChild, { childOnly: true })); }, text: "Ajouter un enfant" }) : null),
-      h("section", { class: "card" }, h("b", { class: "title-m", text: "Membres" }),
-        S.members.map(function (m) { var me = m.user_id === S.user.id; return h("div", { class: "member" }, memberAvatar(m), h("span", { class: "grow" }, h("span", { text: S.profiles[m.user_id] + (me ? " (vous)" : "") }), h("br"), h("span", { class: "small muted mstate", "data-uid": m.user_id, text: me ? "cet appareil" : S.online[m.user_id] ? "dans l'app" : "" })), h("span", { class: "role", text: roleLbl[m.role] })); }),
-        S.members.length < 2 ? h("span", { class: "small muted", text: "Vous êtes seul pour l'instant. Invitez l'autre parent ci-dessous : son avatar apparaîtra en haut de l'écran Aujourd'hui, avec un point vert quand il a Gloups ouvert." }) : null),
-      isParent ? h("section", { class: "card green" }, h("b", { class: "title-m", text: "Inviter quelqu'un" }), invite) : null,
-      agendaSection(),
-      S.isAdmin ? h("a", { href: "#/admin", class: "card", vars: { "text-decoration": "none", color: "inherit" } }, h("b", { class: "title-m", text: "Tableau de bord" }), h("span", { class: "small muted", text: "Inscrits, cibles et usage de Gloups, sans le contenu des carnets." })) : null,
+      isParent && S.children.length > 1 ? h("section", { class: "card" }, switchBtn(twinMode(), S.children.length === 2 ? "Mode jumeaux" : "Mode multiples", "Choisir à chaque saisie : un enfant ou " + allLabel().toLowerCase() + " d'un coup", async function (v) {
+        var st = Object.assign({}, S.family.settings || {}, { twins: v });
+        var u = await sb.from("families").update({ settings: st }).eq("id", S.family.id);
+        if (u.error) { toast(errMsg(u.error), { error: true }); return; }
+        S.family.settings = st; track("action", v ? "jumeaux_on" : "jumeaux_off");
+      })) : null,
       h("section", { class: "card" }, h("b", { class: "title-m", text: "Cet appareil" }),
         h("a", { href: "#/installer", class: "btn full", text: isStandalone() ? "App installée ✓" : "Installer sur l'écran d'accueil" }),
-        h("button", { class: "btn full", onclick: function () { location.hash = "#/"; setTimeout(function () { startTour(true); }, 700); }, text: "Revoir la visite guidée" }),
-        h("button", { class: "btn full", onclick: signOut, text: "Se déconnecter" }),
-        h("span", { class: "small muted", text: "Gloups " + CFG.version + " · données hébergées dans l'UE" }))));
+        h("button", { class: "btn full", onclick: function () { location.hash = "#/"; setTimeout(function () { startTour(true); }, 700); }, text: "Revoir la visite guidée" })),
+      agendaSection(),
+      h("section", { class: "card" }, h("b", { class: "title-m", text: "Aide" }),
+        h("a", { href: "confidentialite.html", class: "btn full", text: "Confidentialité" }),
+        h("a", { href: "conditions.html", class: "btn full", text: "Conditions d'utilisation" })),
+      h("button", { class: "btn full", onclick: signOut, text: "Se déconnecter" }),
+      h("span", { class: "small muted center", text: "Gloups " + CFG.version + " · données hébergées dans l'UE" })));
+    appEl.append(dock("famille", S.role !== "lecture"));
+  }
+
+  /* ---------- Écran : Google Agenda ---------- */
+  function screenGcal() {
+    if (S.gcal === undefined) { S.gcal = null; loadGcal(); }
+    var me = gcalMe(), on = me && me.connected, broken = on && !!me.error;
+    var others = S.members.filter(function (m) { return m.user_id !== S.user.id; }).map(function (m) { return S.profiles[m.user_id]; });
+    var step = function (n, html) { return h("div", { class: "gc-step" }, h("span", { class: "n", text: String(n) }), h("span", null, html)); };
+    var body;
+    if (GCAL.busy) body = h("section", { class: "card" }, h("b", { text: "Connexion à Google Agenda..." }), h("span", { class: "small muted", text: "Gloups crée votre agenda et y ajoute les rendez-vous." }));
+    else if (!S.gcal) body = h("section", { class: "card" }, h("span", { class: "small muted", text: "Chargement..." }));
+    else if (!on || broken) body = h("section", { class: "card gc-intro" },
+      h("span", { class: "gc-ic", "aria-hidden": "true" }, icon("cal", 28)),
+      h("h2", { class: "title-m", text: broken ? "Google Agenda est à reconnecter" : "Vos rendez-vous dans Google Agenda" }),
+      h("p", { class: "small muted", text: broken ? "L'accès a été retiré côté Google. Reconnectez-le pour reprendre la synchronisation." : "Pédiatre, vaccins, sage-femme : saisis une fois dans Gloups, ils apparaissent tout seuls dans votre agenda." }),
+      step(1, ["Gloups crée un agenda ", h("b", { text: "« Gloups · " + S.family.name + " »" }), " dans votre compte Google."]),
+      step(2, ["Chaque rendez-vous ajouté, déplacé ou annulé, par vous ou " + (others.length ? others.join(", ") : "un autre membre") + ", y est reporté ", h("b", { text: "immédiatement" }), "."]),
+      step(3, ["Gloups n'a accès qu'à cet agenda : ", h("b", { text: "vos autres agendas restent privés" }), "."]),
+      h("button", { class: "btn primary full", onclick: gcalConnect, text: broken ? "Reconnecter mon Google Agenda" : "Connecter mon Google Agenda" }),
+      h("p", { class: "small muted center" }, "Chaque membre connecte son propre agenda. iPhone ou Outlook ? ", h("a", { href: "#/reglages", text: "Utiliser un lien d'abonnement" })));
+    else {
+      var upcoming = (S.appts || []).filter(function (a) { return new Date(a.starts_at) > Date.now(); }).length;
+      body = [
+        h("section", { class: "card" },
+          h("b", { class: "gc-ok" }, h("i", { class: "gc-dot" }), "Connecté"),
+          h("span", null, "Agenda ", h("b", { text: "« Gloups · " + S.family.name + " »" }), " dans votre compte Google."),
+          h("div", { class: "kpis" },
+            h("div", { class: "kpi" }, h("b", { text: String(upcoming) }), h("span", { text: "rendez-vous à venir" })),
+            h("div", { class: "kpi" }, h("b", { text: me.last_sync_at ? ago(me.last_sync_at).replace("il y a ", "") : "-" }), h("span", { text: "dernière mise à jour" }))),
+          h("a", { class: "btn full", href: "https://calendar.google.com/calendar/r", target: "_blank", rel: "noopener", text: "Ouvrir Google Agenda" }),
+          h("button", { class: "btn ghost full", onclick: async function (ev) {
+            var b = ev.currentTarget; b.disabled = true; b.textContent = "Synchronisation...";
+            var res = await gcalCall({ action: "resync" });
+            b.disabled = false; b.textContent = "Tout resynchroniser";
+            toast(res.error ? "La synchronisation a échoué. Réessayez." : "Google Agenda est à jour", { error: !!res.error });
+            loadGcal();
+          }, text: "Tout resynchroniser" })),
+        h("section", { class: "card" }, h("b", { class: "title-m", text: "Dans la famille" }),
+          S.members.map(function (m) {
+            var g = gcalMembers().find(function (x) { return x.user_id === m.user_id; }) || {};
+            var st = g.connected ? (g.error ? "À reconnecter" : "Connecté") : "Pas encore connecté";
+            return h("div", { class: "member" }, memberAvatar(m), h("span", { class: "grow", text: S.profiles[m.user_id] + (m.user_id === S.user.id ? " (vous)" : "") }), h("span", { class: "small " + (g.connected && !g.error ? "gc-ok" : "muted"), text: st }));
+          }),
+          h("span", { class: "small muted", text: "Chacun connecte son agenda depuis son téléphone, dans Famille." })),
+        armBtn("Déconnecter Google Agenda", "Confirmer : ne plus synchroniser", async function (b) {
+          b.disabled = true;
+          var res = await gcalCall({ action: "disconnect" });
+          b.disabled = false;
+          if (res.error) { toast("La déconnexion a échoué. Réessayez.", { error: true }); return; }
+          toast("Google Agenda déconnecté. L'agenda « Gloups » reste dans votre compte, vous pouvez le supprimer depuis Google.");
+          loadGcal();
+        })];
+    }
+    mount(h("main", { class: "screen" },
+      h("a", { href: "#/famille", class: "small", text: "‹ Famille" }),
+      h("h1", { class: "title-l", text: "Google Agenda" }), body));
     appEl.append(dock("famille", S.role !== "lecture"));
   }
   async function addChild(vals) {
@@ -2776,6 +2943,8 @@
     if (r === "journal") screenJournal();
     else if (r === "tendances") screenTrends();
     else if (r === "famille") screenFamily();
+    else if (r === "reglages") screenSettings();
+    else if (r === "google-agenda") screenGcal();
     else if (r === "installer") screenInstall();
     else if (r === "admin" && S.isAdmin) screenAdmin();
     else { screenHome(); if (!TOUR.on) setTimeout(function () { if (!location.hash.replace(/^#\/?/, "")) startTour(false); }, 900); }
@@ -2946,6 +3115,7 @@
         await loadAppts();
         subscribe();
         ping();
+        loadGcal().then(gcalFinishConnect);
         if (lsGet("gloups.src")) sb.rpc("api_v1_set_source", { p_src: lsGet("gloups.src") }).then(function (r) { if (!r.error) lsSet("gloups.src", null); }, function () {});
         sb.rpc("api_admin_is_admin").then(function (r) { var was = S.isAdmin; S.isAdmin = !r.error && r.data === true; if (S.isAdmin !== was && (location.hash === "#/famille" || location.hash === "#/admin")) route(); });
       }
@@ -2977,7 +3147,15 @@
     // Source du lien (?src=ig, flyer, sms...) : enregistrée une seule fois, pour les nouveaux comptes
     var src = p.get("src");
     if (src && /^[A-Za-z0-9_-]{1,24}$/.test(src) && !lsGet("gloups.src")) lsSet("gloups.src", src.toLowerCase());
-    if (inv || src) history.replaceState(null, "", location.pathname + location.hash);
+    // Retour de Google après « Connecter Google Agenda » (?code=...&state=...)
+    var gstate = p.get("state"), gwant = lsGet("gloups.gcal.state");
+    var gback = gstate && gwant && gstate === gwant.split("|")[0];
+    if (gback) {
+      lsSet("gloups.gcal.state", null);
+      if (p.get("code")) lsSet("gloups.gcal.code", p.get("code") + "|" + gwant.split("|")[1]);
+      else lsSet("gloups.gcal.err", p.get("error") || "refus");
+    }
+    if (inv || src || gback) history.replaceState(null, "", location.pathname + (gback ? "#/google-agenda" : location.hash));
   })();
 
   // Minuteurs : mise à jour chaque seconde, sans tout redessiner
