@@ -343,12 +343,12 @@
     S.evFrom = from; S.evChild = S.child.id;
     await loadSleepHist();
   }
-  // Historique de sommeil sur 3 semaines pour la prédiction (heures seules, mis en cache 6 h)
+  // Historique de sommeils et repas sur 3 semaines pour la prédiction (heures seules, mis en cache 6 h)
   var sleepHist = { child: null, at: 0, rows: [] };
   async function loadSleepHist() {
     if (!S.child || (sleepHist.child === S.child.id && Date.now() - sleepHist.at < 6 * 3600000)) return;
-    var r = await sb.from("events").select("id, started_at, ended_at").eq("child_id", S.child.id).eq("type", "sleep").is("deleted_at", null)
-      .not("ended_at", "is", null).gte("started_at", new Date(Date.now() - 22 * 86400000).toISOString()).order("started_at", { ascending: false }).limit(2000);
+    var r = await sb.from("events").select("id, type, started_at, ended_at").eq("child_id", S.child.id).in("type", ["sleep", "feed.breast", "feed.bottle"]).is("deleted_at", null)
+      .gte("started_at", new Date(Date.now() - 22 * 86400000).toISOString()).order("started_at", { ascending: false }).limit(3000);
     if (r.error) return;
     sleepHist = { child: S.child.id, at: Date.now(), rows: r.data || [] };
   }
@@ -1814,17 +1814,26 @@
      qui l'a précédé (écart type 0,7 en log). Au démarrage, des éveils de bébés du même âge
      (±15 jours, carnets publics, js/sleep-prior.js) pèsent l'équivalent de 2 jours d'observations,
      puis s'effacent devant les données de l'enfant. Fourchette = quantiles 5 % et 95 %
-     (environ 80 % de couverture mesurée). Voir claude/algorithme-sommeil.md. */
+     (environ 80 % de couverture mesurée). Recalculé en continu : seuls les éveils plus longs que
+     l'éveil en cours comptent, et un repas noté pendant l'éveil ancre une seconde estimation
+     (délai repas -> endormissement), moyennée avec la première. Voir claude/algorithme-sommeil.md. */
   var NAP_K = { tod: 40, half: 7, days: 21, ld: 0.7, prior: 2, ageWin: 15 };
   function sleepEpisodes() {
     var seen = {}, eps = [];
-    function add(e) { if (!e.ended_at || seen[e.id]) return; seen[e.id] = 1; var a = new Date(e.started_at).getTime(), b = new Date(e.ended_at).getTime(); if (b > a) eps.push([a, b]); }
+    function add(e) { if (!e.ended_at || seen[e.id] || (e.type && e.type !== "sleep")) return; seen[e.id] = 1; var a = new Date(e.started_at).getTime(), b = new Date(e.ended_at).getTime(); if (b > a) eps.push([a, b]); }
     S.events.forEach(function (e) { if (e.type === "sleep") add(e); });
     if (sleepHist.child === (S.child && S.child.id)) sleepHist.rows.forEach(add);
     eps.sort(function (x, y) { return x[0] - y[0]; });
     var out = [];
     eps.forEach(function (e) { var l = out[out.length - 1]; if (l && e[0] - l[1] <= 10 * 60000) l[1] = Math.max(l[1], e[1]); else out.push(e.slice()); });
     return out;
+  }
+  function feedTimes() {
+    var seen = {}, out = [];
+    function add(e) { if (!isFeed(e) || seen[e.id]) return; seen[e.id] = 1; out.push(new Date(e.started_at).getTime()); }
+    S.events.forEach(add);
+    if (sleepHist.child === (S.child && S.child.id)) sleepHist.rows.forEach(add);
+    return out.sort(function (a, b) { return a - b; });
   }
   function todMin(ms) { var d = new Date(ms); return d.getHours() * 60 + d.getMinutes(); }
   function wq(rows, ps) {
@@ -1861,11 +1870,47 @@
       if (own < 3) return null;
       rows.forEach(function (r) { r[1] = 1; }); tot = ownW = rows.length; // aucun éveil comparable : moyenne simple
     }
-    var q = wq(rows, [0.05, 0.5, 0.95]);
+    // Encore éveillé maintenant : on ne garde que les éveils plus longs que l'éveil en cours
+    var now = Date.now(), el = Math.max(0, (now - t) / 60000), over = false, Q = [0.05, 0.5, 0.95], q;
+    var cond = el > 0 ? rows.filter(function (r) { return r[0] > el; }) : rows;
+    if (cond.length && cond.reduce(function (s, r) { return s + r[1]; }, 0) > 1e-9) q = wq(cond, Q);
+    else { q = [el, el, el + 10]; over = true; }
+    // Ancrage sur le dernier repas de l'éveil : délais repas -> endormissement des 3 dernières semaines
+    var fts = feedTimes(), lastF = null;
+    for (var a = fts.length - 1; a >= 0; a--) { if (fts[a] <= now && fts[a] >= t) { lastF = fts[a]; break; } if (fts[a] < t) break; }
+    if (lastF != null && !over) {
+      var fr = [], fTod = todMin(lastF), sinceF = (now - lastF) / 60000, k = 0;
+      fts.forEach(function (fp) {
+        if (fp >= t || t - fp > NAP_K.days * 86400000) return;
+        while (k < eps.length && eps[k][0] <= fp) k++;
+        if (k >= eps.length || k === 0 || eps[k - 1][1] > fp) return;
+        var dl = (eps[k][0] - fp) / 60000; if (dl < 0 || dl > 480 || dl <= sinceF) return;
+        var dd = ((todMin(fp) - fTod) % 1440 + 2160) % 1440 - 720;
+        var w = Math.pow(0.5, (t - fp) / (NAP_K.half * 86400000)) * Math.exp(-0.5 * (dd / NAP_K.tod) * (dd / NAP_K.tod));
+        if (w > 0) fr.push([dl, w]);
+      });
+      if (fr.length >= 3) {
+        var qf = wq(fr, Q), off = (lastF - t) / 60000;
+        q = q.map(function (x, n) { return (x + qf[n] + off) / 2; });
+        q[0] = Math.max(q[0], el);
+      }
+    }
     var lo = Math.min(q[0], q[1] - 10), hi = Math.max(q[2], q[1] + 10);
     var from = new Date(t);
     return { from: from, at: new Date(t + q[1] * 60000), lo: new Date(t + lo * 60000), hi: new Date(t + hi * 60000),
-      width: hi - lo, ownShare: tot ? ownW / tot : 0, days: Object.keys(days).length, n: own };
+      width: over ? 999 : hi - lo, ownShare: tot ? ownW / tot : 0, days: Object.keys(days).length, n: own, fed: lastF != null };
+  }
+  function sheetNapHelp() {
+    track("action", "aide_prediction");
+    var li = function (b, t) { return h("li", null, h("b", { text: b }), " " + t); };
+    openSheet("Comment c'est calculé", h("div", { class: "stack nap-help-body" },
+      h("p", { text: "Fondé sur la recherche sur le sommeil du nourrisson et vérifié sur de vrais carnets de bébés." }),
+      h("ul", null,
+        li("Méthode :", "quantiles conditionnels, retenue face au modèle de référence à deux processus (Borbély)."),
+        li("Données :", "ses éveils à la même heure, la durée du dernier sommeil, le dernier repas."),
+        li("Vérifié :", "plus de 8 000 sommeils, 25 min d'écart moyen, deux fois moins que la méthode simple ; 8 fois sur 10 dans la fourchette."),
+        li("Son âge :", "l'horloge jour/nuit s'installe entre 6 et 18 semaines ; au début, Gloups s'appuie aussi sur des bébés du même âge.")),
+      h("p", { class: "small", text: "Indicatif, ne remplace pas un avis médical. Sources : Borbély 1982, Galland 2012, Joseph 2015, Mindell 2016." })));
   }
   function napCard(canWrite) {
     var n = nextNap();
@@ -1888,7 +1933,8 @@
       h("div", { class: "stack", vars: { gap: "4px", "min-width": "0" } },
         h("span", { class: "k", text: night ? "Endormissement estimé" : "Prochaine sieste estimée" }),
         h("span", { class: "v", text: n ? (Date.now() >= n.at.getTime() ? "maintenant" : "vers " + hhmm(n.at)) : "à venir" }),
-        n ? h("span", { class: "s nap-range", text: "Entre " + hhmm(n.lo) + " et " + hhmm(n.hi) }) : null,
+        n ? h("span", { class: "s nap-range" }, "Entre " + hhmm(n.lo) + " et " + hhmm(n.hi),
+          h("button", { class: "nap-help", "aria-label": "Comment cette estimation est calculée", onclick: sheetNapHelp, text: "?" })) : null,
         h("span", { class: "s", text: why })),
       h("div", { class: "nap-dial" }, ring, moon));
   }
@@ -2998,7 +3044,7 @@
       { title: "Bienvenue dans Gloups", body: c + " est prêt. On vous montre l'essentiel en 30 secondes.", cta: "C'est parti", first: true },
       canWrite ? { sel: ".fab", round: true, title: "Notez en un tap", body: "Touchez +, puis une bulle : Repas, Sommeil, Couche ou Pleurs. Le minuteur démarre tout seul. « Plus » donne le bain, la température, le poids, une note et les berceuses." } : null,
       canWrite ? { sel: ".fab", round: true, demo: true, title: "C'était plus tôt ?", body: "Ouvrez le +, puis restez appuyé sur une bulle : glissez sur l'arc pour placer le début et la fin." } : null,
-      { sel: "main.screen .nap", title: "Sa prochaine sieste", body: "Gloups apprend son rythme dès 3 sommeils notés et estime la prochaine sieste." },
+      { sel: "main.screen .nap", title: "Sa prochaine sieste", body: "Gloups apprend son rythme à chaque sommeil et repas notés, et estime la prochaine sieste." },
       { sel: function () { var s = document.querySelector("main.screen section.card .strip"); if (!s) return null; var c = s.closest("section.card"); return [c.firstElementChild, c.querySelector(".counts") || s]; }, title: "Toute la journée d'un coup d'œil", body: "Chaque saisie apparaît sur la frise et dans la liste. Touchez-en une pour la corriger, glissez-la vers la gauche pour la supprimer." },
       { sel: '.dock [data-tab="journal"]', title: "Journal", body: "Toutes les saisies jour par jour ou en vue semaine, avec vos rendez-vous." },
       { sel: '.dock [data-tab="tendances"]', title: "Tendances", body: "Son rythme sur 7 jours, le sommeil par 24 heures, les pleurs par heure et la courbe de poids." },
