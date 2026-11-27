@@ -851,49 +851,63 @@ html.tour-open .fab, html.tour-open .dock-wrap { pointer-events: none; }
 .gc-sync { display: flex; gap: 10px; align-items: flex-start; background: var(--ok-bg); color: var(--ok); border-radius: 16px; padding: 12px 14px; font-size: 14px; line-height: 1.4; }
 .gc-sync svg { flex: none; margin-top: 1px; }
 
-/* ---------- Biberon : curseur de quantité (v0.12.1) ---------- */
+/* ---------- Biberon : curseur de quantité (v0.12.3) ---------- */
+.bd-sheet { gap: 12px; }
 .bd { display: flex; flex-direction: column; align-items: center; gap: 2px; }
-.bd-num { font-size: 52px; font-weight: 800; letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; }
-.bd-num small { font-size: 22px; font-weight: 700; color: var(--muted); }
+.bd-num { font-size: 44px; font-weight: 800; letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; }
+.bd-num small { font-size: 19px; font-weight: 700; color: var(--muted); }
 .bd-num.pop { animation: bdpop .22s ease; }
-@keyframes bdpop { 40% { transform: scale(1.06); } }
-.bd-teat { width: 32px; height: 22px; border-radius: 16px 16px 6px 6px; background: #E9B97A; margin-top: 10px; }
-.bd-ring { width: 80px; height: 16px; border-radius: 6px; background: #D9A15E; margin-top: -2px; }
-.bd-zone { position: relative; width: 250px; height: 236px; touch-action: none; cursor: ns-resize; display: flex; justify-content: center; border-radius: 16px; -webkit-user-select: none; user-select: none; }
-.bd-zone:focus-visible { outline: 3px solid var(--green); outline-offset: 4px; }
-.bd-body { position: relative; width: 112px; height: 100%; border: 3px solid #CFC6B4; border-top-width: 2px; border-radius: 14px 14px 30px 30px; background: #FBF8F1; overflow: hidden; box-sizing: border-box; }
+@keyframes bdpop { 40% { transform: scale(1.05); } }
+.bd-zone { position: relative; width: 100%; display: flex; flex-direction: column; align-items: center; padding: 6px 0 2px; touch-action: none; cursor: ns-resize; -webkit-user-select: none; user-select: none; border-radius: 18px; }
+.bd-zone:focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
+.bd-teat { width: 28px; height: 18px; border-radius: 14px 14px 5px 5px; background: #E9B97A; }
+.bd-ring { width: 74px; height: 14px; border-radius: 5px; background: #D9A15E; margin-top: -2px; }
+.bd-bottle { position: relative; width: 250px; height: 176px; display: flex; justify-content: center; }
+.bd-body { position: relative; width: 104px; height: 100%; border: 3px solid #CFC6B4; border-top-width: 2px; border-radius: 12px 12px 28px 28px; background: #FBF8F1; overflow: hidden; box-sizing: border-box; }
 .bd-milk { position: absolute; left: 0; right: 0; bottom: 0; background: #F4E7C9; transition: height .18s cubic-bezier(.2, .8, .2, 1); }
-.bd-wave { position: absolute; left: 0; top: -7px; width: 200%; height: 14px; background: radial-gradient(ellipse 16px 6px at 16px -1px, transparent 15px, #F4E7C9 16px) 0 0 / 32px 10px repeat-x; animation: bdwave 9s linear infinite; opacity: .9; }
+.bd-wave { position: absolute; left: 0; top: -5px; width: 200%; height: 10px; background: radial-gradient(ellipse 16px 6px at 16px -1px, transparent 15px, #F4E7C9 16px) 0 0 / 32px 10px repeat-x; animation: bdwave 9s linear infinite; opacity: .9; }
 @keyframes bdwave { to { transform: translateX(-50%); } }
 .bd-tick { position: absolute; left: 0; display: flex; align-items: center; gap: 4px; transform: translateY(50%); font-size: 10px; font-weight: 700; color: #8C8473; }
-.bd-tick i { width: 14px; height: 2px; background: #CFC6B4; }
-.bd-rail { position: absolute; top: 3px; bottom: 3px; left: 69px; right: 8px; pointer-events: none; }
+.bd-tick i { width: 12px; height: 2px; background: #CFC6B4; }
+.bd-rail { position: absolute; top: 3px; bottom: 3px; left: 73px; right: 12px; pointer-events: none; }
 .bd-knob { position: absolute; left: 0; right: 0; height: 0; transition: bottom .18s cubic-bezier(.2, .8, .2, 1); }
-.bd-knob i { position: absolute; left: 0; right: 44px; top: -1.5px; height: 3px; border-radius: 2px; background: var(--green); }
-.bd-knob span { position: absolute; right: 0; top: -22px; width: 44px; height: 44px; border-radius: 50%; background: var(--green); color: var(--green-ink); box-shadow: 0 6px 16px rgba(31, 74, 58, .35); display: flex; flex-direction: column; align-items: center; justify-content: center; transition: transform .15s; }
+.bd-knob i { position: absolute; left: 0; right: 42px; top: -1.5px; height: 3px; border-radius: 2px; background: var(--green); }
+.bd-knob span { position: absolute; right: 0; top: -21px; width: 42px; height: 42px; border-radius: 50%; background: var(--green); color: var(--green-ink); box-shadow: 0 6px 16px rgba(31, 74, 58, .35); display: flex; flex-direction: column; align-items: center; justify-content: center; transition: transform .15s; }
 .bd-knob span svg { margin: -3px 0; }
 .bd-zone.drag .bd-milk, .bd-zone.drag .bd-knob { transition: none; }
 .bd-zone.drag .bd-knob span { transform: scale(1.1); }
-.bd-same { align-self: center; border: 1px dashed #CFC6B4; background: none; border-radius: 999px; padding: 8px 14px; min-height: 36px; font: inherit; font-size: 13px; color: var(--ink); cursor: pointer; }
+.bd-same { position: absolute; left: 0; bottom: 4px; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; border: 1px dashed #CFC6B4; background: var(--bg); border-radius: 14px; padding: 7px 11px; font: inherit; font-size: 12px; line-height: 1.2; color: var(--muted); text-align: left; cursor: pointer; }
+.bd-same b { color: var(--ink); font-size: 14px; }
+.bd-milkseg button { min-height: 40px; }
 @media (prefers-reduced-motion: reduce) { .bd-wave, .bd-num.pop { animation: none; } .bd-milk, .bd-knob { transition: none; } }
 
-/* ---------- Heure : règle horizontale (v0.12.2) ---------- */
-.ts { gap: 8px; }
-.ts-head { display: flex; justify-content: space-between; align-items: center; min-height: 32px; }
-.ts-now { border: 0; background: var(--soft); color: var(--ink); border-radius: 999px; padding: 6px 12px; min-height: 32px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
-.ts-read { display: flex; align-items: baseline; gap: 10px; }
-.ts-big { font-size: 30px; font-weight: 800; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+/* ---------- Heure : ligne compacte et règle fine (v0.12.3) ---------- */
+.ts { display: flex; flex-direction: column; gap: 4px; }
+.ts-head { display: flex; align-items: baseline; gap: 8px; min-height: 30px; }
+.ts-lbl { font-size: 13px; font-weight: 650; color: var(--muted); margin-right: 2px; }
+.ts-big { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .ts-big.pop { animation: bdpop .2s ease; }
-.ts-rel { font-size: 14px; color: var(--muted); font-weight: 600; }
-.ts-ruler { position: relative; height: 76px; border-radius: 18px; background: var(--soft); overflow: hidden; touch-action: none; cursor: ew-resize; -webkit-user-select: none; user-select: none; }
-.ts-ruler:focus-visible { outline: 3px solid var(--green); outline-offset: 3px; }
+.ts-rel { font-size: 13px; color: var(--muted); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ts-now { align-self: center; border: 0; background: var(--soft); color: var(--ink); border-radius: 999px; padding: 5px 11px; min-height: 30px; font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.ts-ruler { position: relative; height: 40px; overflow: hidden; touch-action: none; cursor: ew-resize; -webkit-user-select: none; user-select: none; border-radius: 8px; }
+.ts-ruler::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: #DCD3C2; }
+.ts-ruler:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 .ts-track { position: absolute; left: 0; top: 0; bottom: 0; will-change: transform; }
 .ts-track.anim { transition: transform .25s cubic-bezier(.2, .8, .2, 1); }
-.ts-track i { position: absolute; top: 12px; width: 2px; height: 12px; margin-left: -1px; border-radius: 1px; background: #C9C0AE; }
-.ts-track i.m { height: 20px; background: #A39A87; }
-.ts-track i.h { height: 30px; background: var(--ink); }
-.ts-track span { position: absolute; top: 46px; width: 48px; text-align: center; font-size: 12px; font-weight: 700; color: var(--muted); white-space: nowrap; }
-.ts-mark { position: absolute; left: 50%; top: 6px; bottom: 6px; width: 4px; margin-left: -2px; border-radius: 2px; background: var(--green); box-shadow: 0 0 0 3px rgba(255, 253, 248, .8); }
-.ts-fade { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, var(--soft), transparent 18%, transparent 82%, var(--soft)); }
+.ts-track i { position: absolute; bottom: 0; width: 1.5px; height: 6px; margin-left: -.75px; background: #CFC6B4; }
+.ts-track i.m { height: 10px; background: #B3AA97; }
+.ts-track i.h { height: 15px; width: 2px; margin-left: -1px; background: #6F7A71; }
+.ts-track span { position: absolute; top: 2px; width: 48px; text-align: center; font-size: 11px; font-weight: 650; color: #8C8473; white-space: nowrap; }
+.ts-mark { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--green); border-radius: 1px; }
+.ts-mark::before { content: ""; position: absolute; left: -4px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; background: var(--green); }
+.ts-fade { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, var(--bg), rgba(244, 239, 228, 0) 20%, rgba(244, 239, 228, 0) 80%, var(--bg)); }
 @media (prefers-reduced-motion: reduce) { .ts-track.anim { transition: none; } .ts-big.pop { animation: none; } }
-.ts-help { margin: 0; }
+/* Petits écrans (iPhone SE...) : tout tient sans défiler */
+@media (max-height: 720px) {
+  .bd-sheet { gap: 8px; }
+  .bd-num { font-size: 36px; }
+  .bd-bottle { height: 124px; }
+  .bd-teat { height: 14px; width: 24px; }
+  .bd-ring { height: 11px; width: 64px; }
+  .bd-tick:nth-of-type(even) { display: none; }
+}
