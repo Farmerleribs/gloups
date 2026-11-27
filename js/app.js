@@ -341,6 +341,16 @@
     if (r.error) throw r.error;
     S.events = r.data || [];
     S.evFrom = from; S.evChild = S.child.id;
+    await loadSleepHist();
+  }
+  // Historique de sommeil sur 3 semaines pour la prédiction (heures seules, mis en cache 6 h)
+  var sleepHist = { child: null, at: 0, rows: [] };
+  async function loadSleepHist() {
+    if (!S.child || (sleepHist.child === S.child.id && Date.now() - sleepHist.at < 6 * 3600000)) return;
+    var r = await sb.from("events").select("id, started_at, ended_at").eq("child_id", S.child.id).eq("type", "sleep").is("deleted_at", null)
+      .not("ended_at", "is", null).gte("started_at", new Date(Date.now() - 22 * 86400000).toISOString()).order("started_at", { ascending: false }).limit(2000);
+    if (r.error) return;
+    sleepHist = { child: S.child.id, at: Date.now(), rows: r.data || [] };
   }
   function subscribe() {
     if (S.channel) { sb.removeChannel(S.channel); S.channel = null; }
@@ -1798,20 +1808,64 @@
     return track;
   }
 
-  // Estimation de la prochaine sieste à partir des éveils observés (médiane), sans valeur externe
+  /* Prédiction du prochain endormissement : quantiles conditionnels à noyau.
+     Chaque éveil passé pèse selon (1) la proximité de l'heure du réveil (écart type 40 min),
+     (2) sa récence (demi-vie 7 jours, 21 jours max), (3) la ressemblance de la durée du sommeil
+     qui l'a précédé (écart type 0,7 en log). Au démarrage, des éveils de bébés du même âge
+     (±15 jours, carnets publics, js/sleep-prior.js) pèsent l'équivalent de 2 jours d'observations,
+     puis s'effacent devant les données de l'enfant. Fourchette = quantiles 5 % et 95 %
+     (environ 80 % de couverture mesurée). Voir claude/algorithme-sommeil.md. */
+  var NAP_K = { tod: 40, half: 7, days: 21, ld: 0.7, prior: 2, ageWin: 15 };
+  function sleepEpisodes() {
+    var seen = {}, eps = [];
+    function add(e) { if (!e.ended_at || seen[e.id]) return; seen[e.id] = 1; var a = new Date(e.started_at).getTime(), b = new Date(e.ended_at).getTime(); if (b > a) eps.push([a, b]); }
+    S.events.forEach(function (e) { if (e.type === "sleep") add(e); });
+    if (sleepHist.child === (S.child && S.child.id)) sleepHist.rows.forEach(add);
+    eps.sort(function (x, y) { return x[0] - y[0]; });
+    var out = [];
+    eps.forEach(function (e) { var l = out[out.length - 1]; if (l && e[0] - l[1] <= 10 * 60000) l[1] = Math.max(l[1], e[1]); else out.push(e.slice()); });
+    return out;
+  }
+  function todMin(ms) { var d = new Date(ms); return d.getHours() * 60 + d.getMinutes(); }
+  function wq(rows, ps) {
+    rows.sort(function (x, y) { return x[0] - y[0]; });
+    var tot = rows.reduce(function (s, r) { return s + r[1]; }, 0), out = [];
+    ps.forEach(function (p) { var c = 0; for (var i = 0; i < rows.length; i++) { c += rows[i][1]; if (c / tot >= p) { out.push(rows[i][0]); return; } } out.push(rows[rows.length - 1][0]); });
+    return out;
+  }
   function nextNap() {
-    var sleeps = S.events.filter(function (e) { return e.type === "sleep" && e.ended_at; }).slice().sort(function (a, b) { return new Date(a.started_at) - new Date(b.started_at); });
-    var gaps = [];
-    for (var i = 1; i < sleeps.length; i++) {
-      var g = (new Date(sleeps[i].started_at) - new Date(sleeps[i - 1].ended_at)) / 60000;
-      if (g > 0 && g < 360) gaps.push(g);
+    var eps = sleepEpisodes();
+    if (!eps.length) return null;
+    var last = eps[eps.length - 1], t = last[1], tod = todMin(t), ld = Math.log(Math.max(1, (last[1] - last[0]) / 60000));
+    function kw(wTod, wLd) { var d = ((wTod - tod) % 1440 + 2160) % 1440 - 720, l = wLd - ld; return Math.exp(-0.5 * (d / NAP_K.tod) * (d / NAP_K.tod)) * Math.exp(-0.5 * (l / NAP_K.ld) * (l / NAP_K.ld)); }
+    var rows = [], own = 0, ownW = 0, days = {};
+    for (var i = 0; i < eps.length - 1; i++) {
+      var w0 = eps[i][1];
+      if (t - w0 > NAP_K.days * 86400000) continue;
+      var g = (eps[i + 1][0] - w0) / 60000;
+      if (g < 1 || g > 480) continue;
+      var w = kw(todMin(w0), Math.log(Math.max(1, (eps[i][1] - eps[i][0]) / 60000))) * Math.pow(0.5, (t - w0) / (NAP_K.half * 86400000));
+      rows.push([g, w]); own++; ownW += w; days[new Date(w0).toDateString()] = 1;
     }
-    if (gaps.length < 3 || !sleeps.length) return null;
-    gaps = gaps.slice(-12).sort(function (a, b) { return a - b; });
-    var med = gaps[Math.floor(gaps.length / 2)];
-    var from = new Date(sleeps[sleeps.length - 1].ended_at);
-    var at = new Date(from.getTime() + med * 60000);
-    return { at: at, from: from, med: med, n: gaps.length };
+    var prior = 0, P = window.GLOUPS_PRIOR, bd = S.child && S.child.birth_date ? new Date(S.child.birth_date + "T00:00:00").getTime() : null;
+    if (P && bd != null) {
+      var age = (t - bd) / 86400000, sel = [];
+      for (var j = 0; j < P.length; j += 4) if (Math.abs(P[j] - age) <= NAP_K.ageWin) sel.push(j);
+      if (sel.length) {
+        var each = NAP_K.prior * 12 / sel.length;
+        sel.forEach(function (j) { var w = each * kw(P[j + 1] * 5, P[j + 2] / 10); if (w > 0) { rows.push([P[j + 3], w]); prior += w; } });
+      }
+    }
+    var tot = ownW + prior;
+    if (tot < 1e-6) {
+      if (own < 3) return null;
+      rows.forEach(function (r) { r[1] = 1; }); tot = ownW = rows.length; // aucun éveil comparable : moyenne simple
+    }
+    var q = wq(rows, [0.05, 0.5, 0.95]);
+    var lo = Math.min(q[0], q[1] - 10), hi = Math.max(q[2], q[1] + 10);
+    var from = new Date(t);
+    return { from: from, at: new Date(t + q[1] * 60000), lo: new Date(t + lo * 60000), hi: new Date(t + hi * 60000),
+      width: hi - lo, ownShare: tot ? ownW / tot : 0, days: Object.keys(days).length, n: own };
   }
   function napCard(canWrite) {
     var n = nextNap();
@@ -1826,11 +1880,16 @@
       ring.appendChild(ci);
     });
     var moon = canWrite ? h("button", { class: "nap-btn", "aria-label": "Il s'endort maintenant", onclick: sheetSleep }, icon("moon", 24)) : h("span", { class: "nap-btn", "aria-hidden": "true" }, icon("moon", 24));
-    return h("section", { class: "nap" + (due ? " due" : ""), "aria-label": "Prochaine sieste" },
-      h("div", { class: "stack", vars: { gap: "4px" } },
-        h("span", { class: "k", text: "Prochaine sieste estimée" }),
-        h("span", { class: "v", text: n ? "vers " + hhmm(n.at) : "à venir" }),
-        h("span", { class: "s", text: n ? "D'après ses " + n.n + " derniers éveils (" + dur(n.med) + " en général)" : "Estimée dès 3 sommeils notés, à partir de son propre rythme" })),
+    var hr = n ? new Date(Math.max(Date.now(), n.at.getTime())).getHours() : 12, night = hr >= 19 || hr < 6;
+    var conf = n ? (n.width <= 40 ? "Fiable" : n.width <= 90 ? "Assez fiable" : "Indicatif") : "";
+    var why = !n ? (S.child && S.child.birth_date ? "Estimée dès le premier sommeil noté" : "Estimée dès 3 sommeils notés")
+      : conf + " · " + (n.ownShare < 0.5 ? "bébés de son âge" : n.days >= 21 ? "sur 3 semaines" : n.days > 1 ? "sur " + n.days + " jours" : "sur 1 jour");
+    return h("section", { class: "nap" + (due ? " due" : ""), "aria-label": night ? "Prochain endormissement" : "Prochaine sieste" },
+      h("div", { class: "stack", vars: { gap: "4px", "min-width": "0" } },
+        h("span", { class: "k", text: night ? "Endormissement estimé" : "Prochaine sieste estimée" }),
+        h("span", { class: "v", text: n ? (Date.now() >= n.at.getTime() ? "maintenant" : "vers " + hhmm(n.at)) : "à venir" }),
+        n ? h("span", { class: "s nap-range", text: "Entre " + hhmm(n.lo) + " et " + hhmm(n.hi) }) : null,
+        h("span", { class: "s", text: why })),
       h("div", { class: "nap-dial" }, ring, moon));
   }
 
