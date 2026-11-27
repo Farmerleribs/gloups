@@ -271,7 +271,7 @@
     // Tirer la feuille vers le bas pour la fermer
     var y0 = null, dy = 0, t0 = 0;
     sheet.addEventListener("touchstart", function (e) {
-      if (sheet.scrollTop > 0 || e.touches.length > 1) { y0 = null; return; }
+      if (sheet.scrollTop > 0 || e.touches.length > 1 || (e.target.closest && e.target.closest("[data-nodrag]"))) { y0 = null; return; }
       y0 = e.touches[0].clientY; dy = 0; t0 = Date.now();
     }, { passive: true });
     sheet.addEventListener("touchmove", function (e) {
@@ -1293,26 +1293,72 @@
   }
 
   /* ---------- Feuilles de saisie ---------- */
+  // Heure de la saisie : règle horizontale à faire glisser, à la minute près, jusqu'à 24 h en arrière (v0.12.2)
   function timeChooser() {
-    var choice = 0;
-    var custom = h("input", { class: "input", type: "time", hidden: true, value: hhmm(new Date()) });
-    var chips = h("div", { class: "chips" });
-    var opts = [[0, "Maintenant"], [15, "Il y a 15 min"], [30, "Il y a 30 min"], [-1, "Autre heure"]];
-    function draw() {
-      chips.replaceChildren.apply(chips, opts.map(function (o) {
-        return h("button", { type: "button", class: "chip", "aria-pressed": choice === o[0] ? "true" : "false", onclick: function () { choice = o[0]; custom.hidden = choice !== -1; draw(); }, text: o[1] });
-      }));
+    var PX = 6, MAXM = 24 * 60, CENTER = 0, off = 0, x0 = 0, off0 = 0, drag = false, vel = 0, lastX = 0, lastT = 0, raf = 0;
+    var t0 = new Date(); t0.setSeconds(0, 0);
+    var track = h("div", { class: "ts-track" });
+    // Graduations calées sur l'horloge : toutes les 5 min, plus marquées à la demi-heure et à l'heure
+    for (var m = t0.getMinutes() % 5; m <= MAXM; m += 5) {
+      var d = new Date(t0.getTime() - m * 60000), hour = d.getMinutes() === 0, half = d.getMinutes() === 30;
+      track.append(h("i", { class: hour ? "h" : half ? "m" : "", vars: { left: (-m * PX) + "px" } }));
+      if (hour || half) track.append(h("span", { vars: { left: (-m * PX - 24) + "px" }, text: d.getHours() + " h" + (half ? " 30" : "") }));
     }
-    draw();
-    return {
-      el: h("div", { class: "field" }, h("span", { text: "Heure" }), chips, custom),
-      value: function () {
-        if (choice >= 0) return new Date(Date.now() - choice * 60000);
-        var p = custom.value.split(":"), d = new Date(); d.setHours(+p[0], +p[1], 0, 0);
-        if (d > new Date()) d = new Date(d.getTime() - 86400000);
-        return d;
-      }
-    };
+    var big = h("b", { class: "ts-big" }), rel = h("span", { class: "ts-rel" });
+    var now = h("button", { type: "button", class: "ts-now", onclick: function () { stop(); set(0, true); } }, "Maintenant");
+    var ruler = h("div", { class: "ts-ruler", "data-nodrag": "", role: "slider", tabindex: "0", "aria-label": "Heure de la saisie", "aria-valuemin": "0", "aria-valuemax": String(MAXM) },
+      track, h("div", { class: "ts-mark", "aria-hidden": "true" }), h("div", { class: "ts-fade", "aria-hidden": "true" }));
+    function when() { return off === 0 ? new Date() : new Date(t0.getTime() - off * 60000); }
+    function set(v, anim) {
+      v = Math.max(0, Math.min(MAXM, Math.round(v)));
+      var changed = v !== off; off = v;
+      if (!CENTER) CENTER = ruler.clientWidth / 2 || 175;
+      track.classList.toggle("anim", !!anim);
+      track.style.transform = "translateX(" + (CENTER + off * PX) + "px)";
+      var d = when();
+      big.textContent = pad(d.getHours()) + " h " + pad(d.getMinutes());
+      rel.textContent = off === 0 ? "Maintenant" : off < 60 ? "Il y a " + off + " min" : "Il y a " + Math.floor(off / 60) + " h " + pad(off % 60);
+      now.hidden = off === 0;
+      ruler.setAttribute("aria-valuenow", String(off)); ruler.setAttribute("aria-valuetext", big.textContent + ", " + rel.textContent.toLowerCase());
+      if (changed && !anim) { big.classList.remove("pop"); void big.offsetWidth; big.classList.add("pop"); }
+    }
+    function stop() { if (raf) cancelAnimationFrame(raf); raf = 0; }
+    function fling() {
+      // Élan après un lancer : ralentit doucement puis s'arrête sur une minute
+      var step = function () {
+        vel *= 0.88;
+        if (Math.abs(vel) < 0.02) { raf = 0; set(Math.round(off), true); return; }
+        set(off + vel * 16 / PX); raf = requestAnimationFrame(step);
+      };
+      raf = requestAnimationFrame(step);
+    }
+    ruler.addEventListener("pointerdown", function (e) {
+      stop(); drag = true; x0 = lastX = e.clientX; off0 = off; lastT = performance.now(); vel = 0;
+      ruler.classList.add("drag"); try { ruler.setPointerCapture(e.pointerId); } catch (x) { /* rien */ } e.preventDefault();
+    });
+    ruler.addEventListener("pointermove", function (e) {
+      if (!drag) return;
+      var t = performance.now();
+      if (t > lastT) vel = 0.8 * ((e.clientX - lastX) / (t - lastT)) + 0.2 * vel;
+      lastX = e.clientX; lastT = t;
+      set(off0 + (e.clientX - x0) / PX);
+    });
+    ["pointerup", "pointercancel"].forEach(function (ty) { ruler.addEventListener(ty, function () {
+      if (!drag) return; drag = false; ruler.classList.remove("drag");
+      if (performance.now() - lastT < 80 && Math.abs(vel) > 0.25) fling();
+    }); });
+    ruler.addEventListener("touchmove", function (e) { e.preventDefault(); }, { passive: false });
+    ruler.addEventListener("keydown", function (e) {
+      var k = { ArrowLeft: 1, ArrowRight: -1, ArrowDown: 1, ArrowUp: -1, PageDown: 15, PageUp: -15, Home: -MAXM }[e.key];
+      if (k) { e.preventDefault(); stop(); set(off + k, true); }
+    });
+    var el = h("div", { class: "field ts" },
+      h("div", { class: "ts-head" }, h("span", { text: "Heure" }), now),
+      h("div", { class: "ts-read" }, big, rel), ruler,
+      h("p", { class: "small muted ts-help", text: "Faites glisser vers la droite pour remonter le temps" }));
+    requestAnimationFrame(function () { CENTER = 0; set(off); });
+    set(0);
+    return { el: el, value: when };
   }
   function selectField(lbl, map, empty) {
     var s = h("select", { class: "input" }, h("option", { value: "", text: empty || "Non précisé" }), Object.keys(map).map(function (k) { return h("option", { value: k, text: map[k] }); }));
@@ -1356,7 +1402,7 @@
     }));
     var knob = h("div", { class: "bd-knob", "aria-hidden": "true" }, h("i"), h("span", null, icon("up", 14), icon("down", 14)));
     var num = h("b", { class: "bd-num" });
-    var zone = h("div", { class: "bd-zone", role: "slider", tabindex: "0", "aria-label": "Quantité du biberon", "aria-valuemin": "0", "aria-valuemax": String(MAX) },
+    var zone = h("div", { class: "bd-zone", "data-nodrag": "", role: "slider", tabindex: "0", "aria-label": "Quantité du biberon", "aria-valuemin": "0", "aria-valuemax": String(MAX) },
       body, h("div", { class: "bd-rail" }, knob));
     function set(v) {
       v = Math.max(0, Math.min(MAX, Math.round(v / 5) * 5));
@@ -1375,6 +1421,7 @@
     }
     zone.addEventListener("pointerdown", function (e) { drag = true; zone.classList.add("drag"); try { zone.setPointerCapture(e.pointerId); } catch (x) { /* rien */ } fromY(e); e.preventDefault(); });
     zone.addEventListener("pointermove", function (e) { if (drag) fromY(e); });
+    zone.addEventListener("touchmove", function (e) { e.preventDefault(); }, { passive: false });
     ["pointerup", "pointercancel", "lostpointercapture"].forEach(function (t) { zone.addEventListener(t, function () { drag = false; zone.classList.remove("drag"); }); });
     zone.addEventListener("keydown", function (e) {
       var d = { ArrowUp: 5, ArrowRight: 5, ArrowDown: -5, ArrowLeft: -5, PageUp: 25, PageDown: -25 }[e.key];
