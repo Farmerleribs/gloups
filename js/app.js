@@ -95,6 +95,8 @@
     chart: "M5 20V11M12 20V5M19 20v-8",
     cal: "M4 6h16v14H4zM4 10h16M8 3v4M16 3v4",
     chev: "M9 6l6 6-6 6",
+    up: "M6 15l6-6 6 6",
+    down: "M6 9l6 6 6-6",
     music: "M9 18V5l11-2v13M9 18a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0zM20 16a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0z",
     noise: "M3 12h2M7 8v8M11 5v14M15 9v6M19 7v10",
     play: "M8 5l11 7-11 7z",
@@ -1345,15 +1347,67 @@
     openSheet("Tétée passée", h("div", { class: "stack" }, entryPicker(), sideSeg, h("div", { class: "field" }, h("span", { text: "Durée" }), durChips), t.el,
       h("button", { class: "btn primary full", onclick: function () { var st = t.value(); logEvent("feed.breast", { side: side }, { started: st, ended: new Date(st.getTime() + mins * 60000) }); }, text: "Enregistrer" })));
   }
+  // Quantité du biberon : biberon gradué, curseur à faire glisser de 5 en 5 ml (v0.12.1)
+  function bottleDial(start, onchange) {
+    var MAX = 260, ml = -1, drag = false;
+    var milk = h("div", { class: "bd-milk" }, h("div", { class: "bd-wave", "aria-hidden": "true" }));
+    var body = h("div", { class: "bd-body" }, milk, [50, 100, 150, 200, 250].map(function (v) {
+      return h("span", { class: "bd-tick", "aria-hidden": "true", vars: { bottom: (v / MAX * 100) + "%" } }, h("i"), String(v));
+    }));
+    var knob = h("div", { class: "bd-knob", "aria-hidden": "true" }, h("i"), h("span", null, icon("up", 14), icon("down", 14)));
+    var num = h("b", { class: "bd-num" });
+    var zone = h("div", { class: "bd-zone", role: "slider", tabindex: "0", "aria-label": "Quantité du biberon", "aria-valuemin": "0", "aria-valuemax": String(MAX) },
+      body, h("div", { class: "bd-rail" }, knob));
+    function set(v) {
+      v = Math.max(0, Math.min(MAX, Math.round(v / 5) * 5));
+      if (v === ml) return;
+      ml = v;
+      var pct = ml / MAX * 100;
+      milk.style.height = pct + "%"; knob.style.bottom = pct + "%";
+      num.replaceChildren(String(ml), h("small", { text: NB + "ml" }));
+      num.classList.remove("pop"); void num.offsetWidth; num.classList.add("pop");
+      zone.setAttribute("aria-valuenow", String(ml)); zone.setAttribute("aria-valuetext", ml + " ml");
+      if (onchange) onchange(ml);
+    }
+    function fromY(e) {
+      var r = zone.getBoundingClientRect();
+      set((1 - (e.clientY - r.top - 3) / (r.height - 6)) * MAX);
+    }
+    zone.addEventListener("pointerdown", function (e) { drag = true; zone.classList.add("drag"); try { zone.setPointerCapture(e.pointerId); } catch (x) { /* rien */ } fromY(e); e.preventDefault(); });
+    zone.addEventListener("pointermove", function (e) { if (drag) fromY(e); });
+    ["pointerup", "pointercancel", "lostpointercapture"].forEach(function (t) { zone.addEventListener(t, function () { drag = false; zone.classList.remove("drag"); }); });
+    zone.addEventListener("keydown", function (e) {
+      var d = { ArrowUp: 5, ArrowRight: 5, ArrowDown: -5, ArrowLeft: -5, PageUp: 25, PageDown: -25 }[e.key];
+      if (d) { e.preventDefault(); set(ml + d); }
+    });
+    set(start);
+    return {
+      el: h("div", { class: "bd" }, num, h("span", { class: "small muted", text: "Faites glisser le curseur vers le haut ou le bas" }),
+        h("span", { class: "bd-teat", "aria-hidden": "true" }), h("span", { class: "bd-ring", "aria-hidden": "true" }), zone),
+      value: function () { return ml; }, set: set
+    };
+  }
   function sheetBottle() {
-    var ml = 90;
-    var chips = h("div", { class: "chips" });
-    function draw() { chips.replaceChildren.apply(chips, [30, 60, 90, 120, 150, 180, 210].map(function (v) { return h("button", { type: "button", class: "chip", "aria-pressed": ml === v ? "true" : "false", onclick: function () { ml = v; draw(); }, text: v + NB + "ml" }); })); }
-    draw();
+    // Départ = quantité du dernier biberon de l'enfant (7 derniers jours en mémoire, sinon on le cherche en base)
+    var last = (S.events || []).find(function (e) { return e.type === "feed.bottle" && e.data && e.data.ml != null; }) || null;
+    var same = h("button", { type: "button", class: "bd-same", hidden: true, onclick: function () { if (last) dial.set(last.data.ml); } });
+    function drawSame(v) {
+      same.hidden = !last || v === last.data.ml;
+      if (last) same.replaceChildren("Comme le dernier : ", h("b", { text: last.data.ml + NB + "ml" }), " à " + hhmm(last.started_at).replace(":", " h "));
+    }
+    var save = h("button", { class: "btn primary full", onclick: function () { var d = { ml: dial.value() }; if (milk.value()) d.milk = milk.value(); logEvent("feed.bottle", d, { started: t.value() }); } });
+    var dial = bottleDial(last ? last.data.ml : 90, function (v) { save.textContent = "Enregistrer · " + v + NB + "ml"; drawSame(v); });
     var milk = selectField("Lait", { breastmilk: "Lait maternel", formula: "Lait infantile", other: "Autre" });
     var t = timeChooser();
-    openSheet("Biberon", h("div", { class: "stack" }, entryPicker(), h("div", { class: "field" }, h("span", { text: "Quantité" }), chips), milk.el, t.el,
-      h("button", { class: "btn primary full", onclick: function () { var d = { ml: ml }; if (milk.value()) d.milk = milk.value(); logEvent("feed.bottle", d, { started: t.value() }); }, text: "Enregistrer le biberon" })));
+    drawSame(dial.value());
+    openSheet("Biberon", h("div", { class: "stack" }, entryPicker(), dial.el, same, milk.el, t.el, save));
+    if (!last && S.child) {
+      sb.from("events").select("started_at,data").eq("child_id", S.child.id).eq("type", "feed.bottle").is("deleted_at", null)
+        .order("started_at", { ascending: false }).limit(1).then(function (r) {
+          var e = r.data && r.data[0];
+          if (e && e.data && e.data.ml != null) { last = e; dial.set(e.data.ml); drawSame(dial.value()); }
+        }, function () {});
+    }
   }
   function sheetPump() {
     var ml = selectField("Quantité", { 20: "20 ml", 40: "40 ml", 60: "60 ml", 80: "80 ml", 100: "100 ml", 120: "120 ml", 150: "150 ml" });
