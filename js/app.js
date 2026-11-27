@@ -73,6 +73,8 @@
   }
   var SVGNS = "http://www.w3.org/2000/svg";
   var ICONS = {
+    bubble: "M4 6.5A3.5 3.5 0 0 1 7.5 3h9A3.5 3.5 0 0 1 20 6.5v6a3.5 3.5 0 0 1-3.5 3.5H11l-4.5 4v-4A3.5 3.5 0 0 1 4 12.5zM8.5 8.5h7M8.5 11.5h4",
+    check: "M5 12.5l4.5 4.5L19 7.5",
     gear: "M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.4 7.4 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.6 7.6 0 0 0 0 2l-2 1.6 2 3.4 2.4-1c.5.4 1.1.7 1.7 1l.3 2.5h4l.4-2.5c.6-.3 1.2-.6 1.7-1l2.4 1 2-3.4z",
     trash: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3",
     share: "M12 3v12M8 7l4-4 4 4M6 11H5v10h14V11h-1",
@@ -428,6 +430,7 @@
     if (!opts.running) toast(label(mine) + (group ? " · " + allLabel().toLowerCase() : "") + " · " + hhmm(mine.started_at), {
       action: { label: "Annuler", fn: function () { removeEvent(mine, true, true); } }
     });
+    avisAfterLog();
     return mine;
   }
   async function stopEvent(ev) {
@@ -2627,6 +2630,89 @@
   }
 
   /* ---------- Écran : réglages et aide ---------- */
+  /* ---------- Avis des utilisateurs ----------
+     Invitation une fois par personne, à la première saisie d'une ouverture de l'app, après le bandeau
+     « Annuler » (5,5 s), jamais pendant une fiche ou la visite. Compte de plus d'un jour.
+     « Plus tard » : reproposé après 7 jours, 2 fois au plus. Avis envoyé ou « Ne plus me demander » : fini. */
+  var AVIS = { st: null, shown: false, timer: null };
+  var AVIS_TOPICS = [["sommeil", "Sommeil"], ["repas", "Repas"], ["couches", "Couches"], ["agenda", "Agenda"], ["famille", "Famille et partage"], ["saisie", "Saisie plus rapide"], ["autre", "Autre"]];
+  function loadAvis() {
+    sb.rpc("api_v1_feedback_state").then(function (r) { if (!r.error && r.data) AVIS.st = r.data; }, function () {});
+  }
+  function avisEligible() {
+    var st = AVIS.st; if (!st || AVIS.shown) return false;
+    var pr = st.prompt || {};
+    if (st.sent > 0 || pr.state === "done" || pr.state === "never") return false;
+    if ((st.account_days || 0) < 1) return false;
+    var n = pr.later_n || 0;
+    if (n >= 3) return false;
+    if (n > 0 && pr.later_at && Date.now() - new Date(pr.later_at).getTime() < 7 * 864e5) return false;
+    return true;
+  }
+  function avisAfterLog() {
+    if (!avisEligible() || AVIS.timer) return;
+    AVIS.timer = setTimeout(function () {
+      AVIS.timer = null;
+      if (!avisEligible() || sheetRoot.firstChild || TOUR.on || document.hidden) return;
+      showAvisInvite();
+    }, 5500);
+  }
+  function avisPrompt(action) {
+    var st = AVIS.st || (AVIS.st = { prompt: {} }), pr = st.prompt || (st.prompt = {});
+    if (action === "never") pr.state = "never"; else { pr.later_n = (pr.later_n || 0) + 1; pr.later_at = new Date().toISOString(); }
+    sb.rpc("api_v1_feedback_prompt", { p_action: action }).then(function () {}, function () {});
+  }
+  function showAvisInvite() {
+    AVIS.shown = true; track("action", "avis_invitation");
+    clearTimeout(toastTimer); toastRoot.replaceChildren();
+    var later = function () { track("action", "avis_plus_tard"); avisPrompt("later"); closeSheet(); };
+    var card = h("section", { class: "avis-card", role: "dialog", "aria-modal": "true", "aria-labelledby": "avis-t" },
+      h("div", { class: "avis-head" },
+        h("span", { class: "avis-ic", "aria-hidden": "true" }, icon("bubble", 28)),
+        h("div", { class: "stack", vars: { gap: "2px" } }, h("b", { id: "avis-t", class: "avis-title", text: "Votre avis compte" }), h("span", { class: "small muted", text: "1 minute, 3 questions" }))),
+      h("p", { class: "avis-txt", text: "Gloups se construit avec les parents. Dites-nous ce qui vous aide, ce qui vous gêne et ce que vous aimeriez voir en plus." }),
+      h("button", { class: "btn primary full", onclick: function () { track("action", "avis_ouvert"); closeSheet(); setTimeout(function () { sheetAvis("invitation"); }, 260); }, text: "Donner mon avis" }),
+      h("div", { class: "row between" },
+        h("button", { class: "btn ghost", onclick: later, text: "Plus tard" }),
+        h("button", { class: "avis-never", onclick: function () { track("action", "avis_jamais"); avisPrompt("never"); closeSheet(); toast("C'est noté. Votre avis reste possible dans Réglages et aide."); }, text: "Ne plus me demander" })));
+    var bd = h("div", { class: "backdrop avis-bd", onclick: function (e) { if (e.target === bd) later(); } }, card);
+    sheetRoot.replaceChildren(bd);
+    document.documentElement.classList.add("sheet-open");
+  }
+  function sheetAvis(origin) {
+    var st = { rating: null, topics: {}, msg: "" }, send, err = h("span", { class: "small avis-err", role: "alert" });
+    var scale = h("div", { class: "avis-scale" }), chips = h("div", { class: "avis-chips" });
+    var LBL = ["Pas vraiment utile", "Peu utile", "Utile", "Très utile", "Indispensable"];
+    function sync() {
+      Array.prototype.forEach.call(scale.children, function (b, i) { b.setAttribute("aria-pressed", st.rating === i + 1 ? "true" : "false"); });
+      Array.prototype.forEach.call(chips.children, function (b) { b.setAttribute("aria-pressed", st.topics[b.dataset.k] ? "true" : "false"); });
+      send.disabled = !(st.rating || Object.keys(st.topics).some(function (k) { return st.topics[k]; }) || st.msg.trim());
+    }
+    [1, 2, 3, 4, 5].forEach(function (n) { scale.append(h("button", { type: "button", "aria-label": n + " sur 5, " + LBL[n - 1], onclick: function () { st.rating = st.rating === n ? null : n; sync(); }, text: String(n) })); });
+    AVIS_TOPICS.forEach(function (t) { chips.append(h("button", { type: "button", "data-k": t[0], onclick: function () { st.topics[t[0]] = !st.topics[t[0]]; sync(); }, text: t[1] })); });
+    var ta = h("textarea", { id: "avis-msg", rows: "4", maxlength: "2000", placeholder: "Une idée, un souci, une envie...", oninput: function () { st.msg = ta.value; sync(); } });
+    send = h("button", { class: "btn primary full", onclick: async function () {
+      send.disabled = true; send.textContent = "Envoi..."; err.textContent = "";
+      var topics = Object.keys(st.topics).filter(function (k) { return st.topics[k]; });
+      var r = await sb.rpc("api_v1_send_feedback", { p_rating: st.rating, p_topics: topics, p_message: st.msg.trim() || null, p_family: S.family ? S.family.id : null, p_version: CFG.version, p_origin: origin });
+      if (r.error) { send.disabled = false; send.textContent = "Envoyer mon avis"; err.textContent = "L'envoi a échoué. Vérifiez la connexion et réessayez."; return; }
+      track("action", "avis_envoye");
+      if (AVIS.st) { AVIS.st.sent = (AVIS.st.sent || 0) + 1; (AVIS.st.prompt || (AVIS.st.prompt = {})).state = "done"; }
+      openSheet("Merci !", h("div", { class: "stack avis-merci" },
+        h("span", { class: "avis-ok", "aria-hidden": "true" }, icon("check", 34)),
+        h("p", { text: "Votre avis est bien arrivé. Chaque message est lu et nous aide à décider des prochaines améliorations." }),
+        h("p", { class: "small muted", text: "Une autre idée plus tard ? Famille › Réglages et aide › Donner mon avis." }),
+        h("button", { class: "btn primary full", onclick: closeSheet, text: "Fermer" })));
+    }, text: "Envoyer mon avis" });
+    openSheet("Votre avis", h("div", { class: "stack avis-form" },
+      h("fieldset", null, h("legend", { text: "1. Gloups vous est-il utile au quotidien ?" }), scale,
+        h("div", { class: "row between small muted" }, h("span", { text: "Pas vraiment" }), h("span", { text: "Indispensable" }))),
+      h("fieldset", null, h("legend", null, "2. À améliorer en priorité ", h("span", { class: "muted", text: "(plusieurs choix)" })), chips),
+      h("div", { class: "stack", vars: { gap: "8px" } }, h("label", { for: "avis-msg", class: "avis-q", text: "3. Ce que vous aimeriez voir de différent ou en plus" }), ta),
+      err, send,
+      h("span", { class: "small muted center", text: "Tout est facultatif. Lu uniquement par l'équipe Gloups." })));
+    sync();
+  }
   function screenSettings() {
     var isParent = S.role === "parent";
     mount(h("main", { class: "screen" },
@@ -2646,6 +2732,7 @@
         h("button", { class: "btn full", onclick: function () { location.hash = "#/"; setTimeout(function () { startTour(true); }, 700); }, text: "Revoir la visite guidée" })),
       agendaSection(),
       h("section", { class: "card" }, h("b", { class: "title-m", text: "Aide" }),
+        h("button", { class: "btn full", onclick: function () { sheetAvis("reglages"); }, text: "Donner mon avis" }),
         h("a", { href: "confidentialite.html", class: "btn full", text: "Confidentialité" }),
         h("a", { href: "conditions.html", class: "btn full", text: "Conditions d'utilisation" })),
       h("button", { class: "btn full", onclick: signOut, text: "Se déconnecter" }),
@@ -2882,10 +2969,39 @@
       steps.length ? h("section", { class: "card" }, h("b", { text: "Parcours" }), steps.map(function (s) { return h("div", { class: "row between small" }, h("span", { text: s[0] }), h("span", { class: "muted", text: dShort(s[1]) })); })) : null,
       h("p", { class: "small muted", text: "Non visibles : adresse e-mail, nom complet, prénom et date de naissance des enfants, contenu des saisies, santé." })));
   }
+  function adminAvis() {
+    if (!ADM.avis && !ADM.avisLoading) {
+      ADM.avisLoading = true;
+      sb.rpc("api_admin_feedback").then(function (r) { ADM.avisLoading = false; ADM.avis = r.error ? { err: errMsg(r.error) } : r.data; if (location.hash === "#/admin" && ADM.tab === "avis") screenAdmin(); });
+    }
+    var A = ADM.avis;
+    if (!A) return [h("section", { class: "card" }, h("span", { class: "muted", text: "Chargement…" }))];
+    if (A.err) return [h("section", { class: "card" }, h("span", { class: "muted", text: A.err }))];
+    var it = A.items || [], rated = it.filter(function (x) { return x.rating; });
+    var avg = rated.length ? rated.reduce(function (s, x) { return s + x.rating; }, 0) / rated.length : null;
+    var tp = {}; it.forEach(function (x) { (x.topics || []).forEach(function (t) { tp[t] = (tp[t] || 0) + 1; }); });
+    var TN = {}; AVIS_TOPICS.forEach(function (t) { TN[t[0]] = t[1]; });
+    var pr = A.prompts || {};
+    return [
+      h("section", { class: "card" }, h("div", { class: "kpis" },
+        h("div", { class: "kpi" }, h("b", { text: String(it.length) }), h("span", { text: it.length > 1 ? "avis reçus" : "avis reçu" })),
+        h("div", { class: "kpi" }, h("b", { text: avg != null ? dec(avg) + " / 5" : "-" }), h("span", { text: "utilité moyenne" }), h("span", { class: "sub", text: rated.length + " notes" })),
+        h("div", { class: "kpi" }, h("b", { text: String(pr.later || 0) }), h("span", { text: "« plus tard »" }), h("span", { class: "sub", text: (pr.never || 0) + " « ne plus demander »" })))),
+      Object.keys(tp).length ? h("section", { class: "card" }, h("b", { text: "À améliorer en priorité" }),
+        hbarRows(Object.keys(tp).sort(function (a, b) { return tp[b] - tp[a]; }).map(function (k) { return [TN[k] || k, tp[k]]; }), "#1F4A3A")) : null
+    ].concat(it.length ? it.map(function (x) {
+      return h("section", { class: "card avis-item" },
+        h("div", { class: "row between" }, h("b", { text: personName(x) + (x.role ? " · " + ROLE_NAME[x.role] : "") }), h("span", { class: "small muted", text: dShort(x.created_at) + " · v" + (x.app_version || "?") })),
+        x.rating ? h("span", { class: "small", text: "Utilité : " + x.rating + " / 5" }) : null,
+        (x.topics || []).length ? h("div", { class: "adm-chips" }, x.topics.map(function (t) { return h("span", { class: "on", text: TN[t] || t }); })) : null,
+        x.message ? h("p", { class: "avis-msg", text: x.message }) : null,
+        x.origin === "reglages" ? h("span", { class: "small muted", text: "Envoyé depuis Réglages et aide" }) : null);
+    }) : [h("section", { class: "card" }, h("span", { class: "muted", text: "Aucun avis pour l'instant." }))]);
+  }
   function screenAdmin() {
     if ((!ADM.data && !ADM.loading && !ADM.err) || (Date.now() - ADM.at > 60000 && !ADM.loading)) loadAdmin();
     var d = ADM.data, pp = ADM.people, P = pp ? pp.people || [] : [];
-    var tabs = h("div", { class: "seg adm-tabs", role: "tablist" }, [["inscrits", "Inscrits"], ["cibles", "Cibles"], ["usage", "Usage"], ["global", "Global"]].map(function (t) {
+    var tabs = h("div", { class: "seg adm-tabs", role: "tablist" }, [["inscrits", "Inscrits"], ["cibles", "Cibles"], ["usage", "Usage"], ["avis", "Avis"], ["global", "Global"]].map(function (t) {
       return h("button", { role: "tab", "aria-pressed": ADM.tab === t[0] ? "true" : "false", "aria-selected": ADM.tab === t[0] ? "true" : "false", onclick: function () { ADM.tab = t[0]; screenAdmin(); }, text: t[1] });
     }));
     var body;
@@ -2897,13 +3013,13 @@
         h("div", { class: "kpi" }, h("b", { text: String(P.length) }), h("span", { text: "inscrits" }), h("span", { class: "sub", text: "+" + wk + " en 7 j" })),
         h("div", { class: "kpi" }, h("b", { text: String(a7) }), h("span", { text: "actifs 7 j" }), h("span", { class: "sub", text: P.length ? Math.round(a7 / P.length * 100) + " %" : "-" })),
         h("div", { class: "kpi" }, h("b", { text: String(d.families || 0) }), h("span", { text: "familles" }), h("span", { class: "sub", text: d.families ? dec(P.filter(function (p) { return p.role; }).length / d.families) + " pers. / fam." : "-" })));
-      var content = ADM.tab === "cibles" ? adminTargets(P) : ADM.tab === "usage" ? adminUsage(P, d, pp.event_hours_7d) : ADM.tab === "global" ? adminGlobal(d) : adminPeople(P);
+      var content = ADM.tab === "cibles" ? adminTargets(P) : ADM.tab === "usage" ? adminUsage(P, d, pp.event_hours_7d) : ADM.tab === "avis" ? adminAvis() : ADM.tab === "global" ? adminGlobal(d) : adminPeople(P);
       body = [head, tabs].concat(content, [h("p", { class: "small muted", text: "Jamais affichés : adresse e-mail, nom complet, prénom des enfants, contenu des saisies, données de santé. Mis à jour " + new Date(d.generated_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) + "." })]);
     }
     mount(h("main", { class: "screen" },
       h("a", { href: "#/famille", class: "small", text: "‹ Famille" }),
       h("span", { class: "eyebrow", text: "Administration" }),
-      h("div", { class: "row between" }, h("h1", { class: "title-l", text: "Tableau de bord" }), h("button", { class: "btn ghost", onclick: function () { ADM.at = 0; loadAdmin(); }, text: "Actualiser" })),
+      h("div", { class: "row between" }, h("h1", { class: "title-l", text: "Tableau de bord" }), h("button", { class: "btn ghost", onclick: function () { ADM.at = 0; ADM.avis = null; loadAdmin(); }, text: "Actualiser" })),
       body));
     appEl.append(dock("famille", S.role === "parent" || S.role === "proche"));
   }
@@ -3331,6 +3447,7 @@
         subscribe();
         ping();
         loadGcal().then(gcalFinishConnect);
+        loadAvis();
         if (lsGet("gloups.src")) sb.rpc("api_v1_set_source", { p_src: lsGet("gloups.src") }).then(function (r) { if (!r.error) lsSet("gloups.src", null); }, function () {});
         sb.rpc("api_admin_is_admin").then(function (r) { var was = S.isAdmin; S.isAdmin = !r.error && r.data === true; if (S.isAdmin !== was && (location.hash === "#/famille" || location.hash === "#/admin")) route(); });
       }
