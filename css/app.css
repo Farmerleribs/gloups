@@ -944,3 +944,23 @@ html.tour-open .fab, html.tour-open .dock-wrap { pointer-events: none; }
 .avis-merci p { margin: 0; line-height: 1.45; }
 .avis-ok { width: 72px; height: 72px; border-radius: 50%; background: #E3EFE8; color: #1F4A3A; display: flex; align-items: center; justify-content: center; }
 .avis-item .avis-msg { margin: 0; white-space: pre-wrap; line-height: 1.45; }
+
+/* Navigateur intégré : Instagram, Facebook... (v0.15.0) */
+.wl.inapp { position: relative; }
+.ia-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: calc(60px + var(--safe-top)) 22px 8px; text-align: center; }
+.ia-logo { width: 96px; height: 96px; border-radius: 50%; background: var(--green); display: flex; align-items: center; justify-content: center; line-height: 0; flex: none; }
+.ia-title { margin: 0; font-size: 28px; font-weight: 750; letter-spacing: -.02em; line-height: 1.15; }
+.ia-text { margin: 0; font-size: 15px; line-height: 1.45; color: #2E3A33; max-width: 340px; }
+.ia-guide { width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 10px; text-align: left; }
+.ia-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.ia-steps li { background: var(--card); border-radius: 18px; padding: 14px 16px; display: flex; gap: 12px; align-items: center; font-size: 15px; line-height: 1.35; }
+.ia-steps .n { flex: none; width: 30px; height: 30px; border-radius: 50%; background: var(--green); color: var(--green-ink); font-weight: 750; display: flex; align-items: center; justify-content: center; }
+.ia-steps b { font-weight: 700; }
+.ia-copy { background: transparent; border: 1.5px solid #DDD5C5; min-height: 48px; border-radius: 999px; font-size: 15px; }
+.ia-guide .btn.primary { border-radius: 999px; min-height: 56px; }
+.ia-foot { padding: 0 20px calc(22px + var(--safe-bottom)); display: flex; justify-content: center; }
+.ia-skip { border: 0; background: transparent; font: inherit; font-size: 13px; color: var(--muted); min-height: 44px; padding: 0 12px; text-decoration: underline; }
+.ia-arrow { position: fixed; top: calc(8px + var(--safe-top)); right: 16px; z-index: 5; color: var(--green); line-height: 0; pointer-events: none; animation: iaNudge 1.6s ease-in-out infinite; }
+@keyframes iaNudge { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(4px, -4px); } }
+@media (prefers-reduced-motion: reduce) { .ia-arrow { animation: none; } }
+@media (max-height: 700px) { .ia-body { gap: 12px; padding-top: calc(48px + var(--safe-top)); } .ia-logo { width: 80px; height: 80px; } .ia-title { font-size: 25px; } }
