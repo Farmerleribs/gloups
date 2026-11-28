@@ -603,7 +603,84 @@
     return h("p", { class: "wl-legal" }, extra || "Données hébergées dans l'Union européenne.", h("br"),
       h("a", { href: "confidentialite.html", text: "Confidentialité" }), " · ", h("a", { href: "conditions.html", text: "Conditions" }));
   }
+  /* ---------- Navigateur intégré (Instagram, Facebook...) : sortir avant l'inscription (v0.15.0) ---------- */
+  var INAPP_NAMES = { instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok", linkedin: "LinkedIn", snapchat: "Snapchat", pinterest: "Pinterest" };
+  function inApp() {
+    var ua = navigator.userAgent || "";
+    if (/Instagram/.test(ua)) return "instagram";
+    if (/FBAN|FBAV|FB_IAB|FBIOS|FB4A|Messenger/.test(ua)) return "facebook";
+    if (/musical_ly|BytedanceWebview|TikTok/i.test(ua)) return "tiktok";
+    if (/LinkedInApp/.test(ua)) return "linkedin";
+    if (/Snapchat/.test(ua)) return "snapchat";
+    if (/Pinterest/.test(ua)) return "pinterest";
+    return null;
+  }
+  function isIOS() { return /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
+  // Adresse à ouvrir dehors : gloups.info, avec l'invitation et la source si présentes
+  function outUrl() {
+    var q = new URLSearchParams(), inv = lsGet("gloups.invite"), src = lsGet("gloups.src");
+    if (inv) q.set("invite", inv);
+    if (src) q.set("src", src);
+    var t = q.toString();
+    return location.origin + location.pathname + (t ? "?" + t : "");
+  }
+  function copyOut() {
+    var u = outUrl();
+    var done = function () { toast(isIOS() ? "Lien copié. Collez-le dans Safari." : "Lien copié. Collez-le dans votre navigateur."); track("action", "inapp_copie"); };
+    var legacy = function () {
+      var t = document.createElement("textarea"); t.value = u; t.setAttribute("readonly", "");
+      t.style.cssText = "position:fixed;top:0;left:0;opacity:0"; document.body.appendChild(t);
+      t.select(); t.setSelectionRange(0, u.length);
+      var ok = false; try { ok = document.execCommand("copy"); } catch (e) {}
+      t.remove();
+      if (ok) done(); else toast("Adresse à ouvrir : " + u.replace(/^https?:\/\//, ""));
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(u).then(done, legacy); else legacy();
+  }
+  function openOutside() {
+    track("action", "inapp_ouvrir");
+    location.href = "intent://" + outUrl().replace(/^https?:\/\//, "") + "#Intent;scheme=https;end";
+  }
+  var IA_ARROW = '<svg width="40" height="40" viewBox="0 0 34 34"><path d="M8 28L26 8M26 8H14M26 8v12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  function inAppArrow() { var a = h("span", { class: "ia-arrow", "aria-hidden": "true" }); a.innerHTML = IA_ARROW; return a; }
+  function inAppGuide(kind) {
+    var copy = h("button", { class: "btn full ia-copy", type: "button", onclick: copyOut, text: "Copier le lien gloups.info" });
+    if (isIOS()) {
+      var step = function (n, a, b, c) { return h("li", null, h("span", { class: "n", text: String(n) }), h("span", { class: "t" }, h("span", null, a, h("b", { text: b }), c || ""))); };
+      return h("div", { class: "ia-guide" },
+        h("ol", { class: "ia-steps" },
+          step(1, "Touchez ", "···", " en haut à droite"),
+          step(2, "Choisissez ", kind === "instagram" ? "«\u00a0Ouvrir dans le navigateur externe\u00a0»" : "«\u00a0Ouvrir dans le navigateur\u00a0»")),
+        copy);
+    }
+    return h("div", { class: "ia-guide" },
+      h("button", { class: "btn primary full", type: "button", onclick: openOutside, text: "Ouvrir dans le navigateur" }),
+      copy,
+      h("span", { class: "small muted center", text: "Rien ne se passe\u00a0? Touchez\u00a0⋮ en haut à droite, puis «\u00a0Ouvrir dans le navigateur\u00a0»." }));
+  }
+  function inAppArrowIf() { return isIOS() ? inAppArrow() : null; }
+  function inAppSkipped() { try { return WL.inappSkip || sessionStorage.getItem("gloups.inapp") === "1"; } catch (e) { return !!WL.inappSkip; } }
+  function screenInApp(kind) {
+    if (appEl.querySelector("main.wl.inapp")) return;
+    clearInterval(WL.timer);
+    var name = INAPP_NAMES[kind] || "Cette app";
+    track("screen", "inapp_" + kind);
+    mount(h("main", { class: "wl inapp", "data-k": "inapp" },
+      isIOS() ? inAppArrow() : null,
+      h("div", { class: "ia-body" },
+        h("span", { class: "ia-logo", "aria-hidden": "true" }, wlBaby(64)),
+        h("h1", { class: "ia-title", text: "Bienvenue sur Gloups" }),
+        h("p", { class: "ia-text", text: name + " ne permet ni de se connecter facilement, ni d'installer l'app. Ouvrez Gloups dans votre navigateur pour continuer" + (isIOS() ? " :" : ".") }),
+        inAppGuide(kind)),
+      h("div", { class: "ia-foot" },
+        h("button", { class: "ia-skip", type: "button", onclick: function () {
+          WL.inappSkip = true; try { sessionStorage.setItem("gloups.inapp", "1"); } catch (e) {}
+          track("action", "inapp_continuer"); screenWelcome();
+        }, text: "Continuer dans " + name + " quand même" }))));
+  }
   function screenWelcome() {
+    var ia = inApp();
+    if (ia && !isStandalone() && !inAppSkipped()) { screenInApp(ia); return; }
     var invite = lsGet("gloups.invite");
     // Déjà affiché : on ne relance pas les animations
     var cur = appEl.querySelector("main.wl");
@@ -3095,6 +3172,7 @@
 
   function screenInstall(choice) {
     var b = choice || detectBrowser();
+    var ia = !isStandalone() && inApp();
     var names = { safari: "iPhone · Safari", chrome: "iPhone · Chrome", other: "iPhone · autre navigateur", android: "Android", desktop: "Ordinateur" };
     var steps = {
       safari: [["Touchez ••• en bas à droite, puis Partager", "iOS 18 ou avant : l'icône Partager, en bas."], ["Choisissez « Sur l'écran d'accueil »", "Faites défiler la liste si besoin."], ["Laissez l'option app web activée, puis Ajouter", "L'icône Gloups apparaît avec vos apps."]],
@@ -3106,7 +3184,12 @@
       return h("button", { "aria-pressed": b === o[0] ? "true" : "false", onclick: function () { screenInstall(o[0]); }, text: o[1] });
     }));
     var content;
-    if (isStandalone()) content = h("div", { class: "card ok" }, h("b", { text: "Gloups est installé sur cet appareil." }), h("span", { class: "small", text: "Vous l'utilisez déjà depuis l'icône." }));
+    if (ia) content = h("div", { class: "stack" },
+      h("div", { class: "card" },
+        h("b", { text: (INAPP_NAMES[ia] || "Cette app") + " ne permet pas d'installer Gloups." }),
+        h("span", { class: "small", text: "Ouvrez cette page dans votre navigateur, puis reconnectez-vous avec le même compte : vous retrouvez votre famille et l'installation prend 30 secondes." })),
+      inAppArrowIf(), inAppGuide(ia));
+    else if (isStandalone()) content = h("div", { class: "card ok" }, h("b", { text: "Gloups est installé sur cet appareil." }), h("span", { class: "small", text: "Vous l'utilisez déjà depuis l'icône." }));
     else if (b === "android") content = h("div", { class: "card" },
       h("p", { text: "Sur Android, Chrome propose l'installation directement." }),
       h("button", { class: "btn primary full", onclick: async function () {
@@ -3120,7 +3203,7 @@
       h("a", { href: "#/", class: "row small", vars: { "text-decoration": "none", "font-weight": "650" } }, icon("back", 18), "Retour"),
       h("div", { class: "row" }, logo(), h("h1", { class: "title-l", text: "Mettez Gloups sur l'écran d'accueil" })),
       h("p", { class: "muted", text: "Une seule fois, 30 secondes. Ensuite Gloups s'ouvre en plein écran, déjà connecté." }),
-      h("span", { class: "small muted", text: "Détecté : " + names[b] }), seg, content,
+      h("span", { class: "small muted", text: "Détecté : " + (ia ? "navigateur intégré à " + (INAPP_NAMES[ia] || "une app") : names[b]) }), ia ? null : seg, content,
       S.family ? h("div", { class: "card ok small", text: "Votre famille est déjà enregistrée : depuis l'icône, vous retrouvez tout." }) : null,
       h("button", { class: "btn ghost", onclick: function () { lsSet("gloups.installHidden", "1"); location.hash = "#/"; }, text: "Plus tard, continuer dans le navigateur" })));
   }
@@ -3486,6 +3569,10 @@
       lsSet("gloups.gcal.state", null);
       if (p.get("code")) lsSet("gloups.gcal.code", p.get("code") + "|" + gwant.split("|")[1]);
       else lsSet("gloups.gcal.err", p.get("error") || "refus");
+    }
+    if (!gback && inApp()) {
+      if (!lsGet("gloups.src")) lsSet("gloups.src", inApp() === "instagram" ? "ig" : inApp());
+      return;
     }
     if (inv || src || gback) history.replaceState(null, "", location.pathname + (gback ? "#/google-agenda" : location.hash));
   })();
